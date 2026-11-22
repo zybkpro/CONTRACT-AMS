@@ -1,0 +1,34 @@
+{
+  "name": "contract-ams",
+  "version": "1.0.0",
+  "private": true,
+  "description": "合同管理系统 · Electron + Vue3 桌面主机模式（内嵌局域网服务 + H5 共享数据）",
+  "main": "apps/desktop/main.js",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5176",
+    "build": "vite build",
+    "server": "node server/index.js",
+    "start": "node server/index.js",
+    "electron": "node scripts/run-electron.js",
+    "desktop": "npm run build && node scripts/run-electron.js",
+    "install:deps": "node scripts/fast-install.js",
+    "install:electron": "node scripts/install-electron.js",
+    "package": "npm run build && node scripts/package-desktop.js",
+    "package:mac": "npm run build && node scripts/package-mac.js",
+    "package:win": "npm run build && node scripts/package-win-portable.js",
+    "test:api": "node scripts/test-api.js"
+  },
+  "dependencies": {
+    "echarts": "^5.6.0",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
+    "sql.js": "^1.13.0",
+    "vue": "^3.5.13",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "electron": "^33.4.9",
+    "vite": "^6.0.5"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "projects": [
+    { "id": "prj-1", "code": "P2026001", "name": "智慧园区一期", "owner": "张伟", "status": "进行中", "start_date": "2026-01-10", "end_date": "2026-12-31", "remark": "标杆项目，含软硬件采购与实施" },
+    { "id": "prj-2", "code": "P2026002", "name": "OA 系统升级", "owner": "李娜", "status": "进行中", "start_date": "2026-03-01", "end_date": "2026-09-30", "remark": "内部信息化" }
+  ],
+  "parties": [
+    { "id": "pty-1", "name": "星辰科技有限公司", "role": "客户", "credit_code": "91310115MA1K3XXXXX", "contact": "王经理", "phone": "13800001111", "bank": "招商银行上海分行", "account": "121908763210901", "rating": "A", "remark": "重点客户" },
+    { "id": "pty-2", "name": "云启软件有限公司", "role": "供应商", "credit_code": "91110108MA01YYYYY", "contact": "赵工", "phone": "13900002222", "bank": "工商银行北京分行", "account": "0200123419200345678", "rating": "B", "remark": "外包开发" },
+    { "id": "pty-3", "name": "恒信硬件有限公司", "role": "供应商", "credit_code": "91440300MA5FZZZZZ", "contact": "陈经理", "phone": "13700003333", "bank": "建设银行深圳分行", "account": "44201500100059876543", "rating": "A", "remark": "" }
+  ],
+  "contracts": [
+    { "id": "ct-1", "contract_no": "XS20260001", "title": "智慧园区一期平台建设合同", "direction": "对外", "type": "销售", "status": "履约中", "project_id": "prj-1", "party_id": "pty-1", "our_entity": "我方科技有限公司", "amount": 1200000, "sign_date": "2026-01-15", "start_date": "2026-01-20", "end_date": "2026-11-30", "owner": "张伟", "remark": "含三年质保" },
+    { "id": "ct-1-1", "contract_no": "XS20260001-补1", "title": "平台建设合同补充协议（增加模块）", "direction": "对外", "type": "补充协议", "status": "已签署", "project_id": "prj-1", "party_id": "pty-1", "parent_id": "ct-1", "our_entity": "我方科技有限公司", "amount": 180000, "sign_date": "2026-05-10", "start_date": "2026-05-10", "end_date": "2026-11-30", "owner": "张伟", "remark": "新增数据大屏模块" },
+    { "id": "ct-2", "contract_no": "CG20260001", "title": "园区软件开发外包合同", "direction": "对内", "type": "外包", "status": "履约中", "project_id": "prj-1", "party_id": "pty-2", "our_entity": "我方科技有限公司", "amount": 450000, "sign_date": "2026-02-01", "start_date": "2026-02-10", "end_date": "2026-10-31", "owner": "张伟", "remark": "" },
+    { "id": "ct-3", "contract_no": "CG20260002", "title": "硬件设备采购合同", "direction": "对内", "type": "采购", "status": "已完成", "project_id": "prj-1", "party_id": "pty-3", "our_entity": "我方科技有限公司", "amount": 320000, "sign_date": "2026-03-05", "start_date": "2026-03-10", "end_date": "2026-06-30", "owner": "李娜", "remark": "已验收" },
+    { "id": "ct-4", "contract_no": "XS20260002", "title": "OA 系统升级服务合同", "direction": "对外", "type": "框架协议", "status": "审批中", "project_id": "prj-2", "party_id": "pty-1", "our_entity": "我方科技有限公司", "amount": 260000, "sign_date": "", "start_date": "2026-07-01", "end_date": "2027-06-30", "auto_renew": true, "terminate_note": "提前30天书面通知可终止", "owner": "李娜", "remark": "待二级审批" },
+    { "id": "ct-5", "contract_no": "XS20260003", "title": "NDA 保密协议", "direction": "对外", "type": "保密", "status": "已签署", "project_id": "", "party_id": "pty-2", "our_entity": "我方科技有限公司", "amount": 0, "sign_date": "2026-04-01", "start_date": "2026-04-01", "end_date": "2026-11-25", "owner": "张伟", "remark": "即将到期演示" }
+  ],
+  "milestones": [
+    { "id": "ms-1", "contract_id": "ct-1", "name": "需求确认", "plan_date": "2026-02-01", "done_date": "2026-01-28", "status": "已完成", "owner": "张伟" },
+    { "id": "ms-2", "contract_id": "ct-1", "name": "系统交付", "plan_date": "2026-09-30", "done_date": "", "status": "进行中", "owner": "张伟" },
+    { "id": "ms-3", "contract_id": "ct-1", "name": "验收", "plan_date": "2026-11-15", "done_date": "", "status": "未开始", "owner": "张伟" },
+    { "id": "ms-4", "contract_id": "ct-2", "name": "第一版交付", "plan_date": "2026-06-30", "done_date": "2026-07-05", "status": "已完成", "owner": "赵工", "remark": "逾期5天" },
+    { "id": "ms-5", "contract_id": "ct-3", "name": "到货验收", "plan_date": "2026-05-31", "done_date": "2026-05-20", "status": "已完成", "owner": "李娜" }
+  ],
+  "payment_plans": [
+    { "id": "pp-1", "contract_id": "ct-1", "direction": "应收", "seq": "1/3 首付", "plan_amount": 360000, "plan_date": "2026-02-28", "status": "已完成" },
+    { "id": "pp-2", "contract_id": "ct-1", "direction": "应收", "seq": "2/3 进度款", "plan_amount": 480000, "plan_date": "2026-09-30", "status": "部分" },
+    { "id": "pp-3", "contract_id": "ct-1", "direction": "应收", "seq": "3/3 尾款", "plan_amount": 360000, "plan_date": "2026-11-30", "status": "未收付" },
+    { "id": "pp-4", "contract_id": "ct-2", "direction": "应付", "seq": "1/2", "plan_amount": 225000, "plan_date": "2026-07-31", "status": "已完成" },
+    { "id": "pp-5", "contract_id": "ct-2", "direction": "应付", "seq": "2/2", "plan_amount": 225000, "plan_date": "2026-10-31", "status": "未收付" },
+    { "id": "pp-6", "contract_id": "ct-3", "direction": "应付", "seq": "全额", "plan_amount": 320000, "plan_date": "2026-06-30", "status": "已完成" }
+  ],
+  "payment_records": [
+    { "id": "pr-1", "contract_id": "ct-1", "plan_id": "pp-1", "amount": 360000, "pay_date": "2026-02-26", "method": "银行转账" },
+    { "id": "pr-2", "contract_id": "ct-1", "plan_id": "pp-2", "amount": 300000, "pay_date": "2026-10-02", "method": "银行转账", "remark": "尚差18万" },
+    { "id": "pr-3", "contract_id": "ct-2", "plan_id": "pp-4", "amount": 225000, "pay_date": "2026-07-28", "method": "银行转账" },
+    { "id": "pr-4", "contract_id": "ct-3", "plan_id": "pp-6", "amount": 320000, "pay_date": "2026-06-25", "method": "承兑" }
+  ],
+  "dictTypes": [
+    { "id": "dt-1", "name": "销售", "direction_scope": "对外", "sort_order": 1 },
+    { "id": "dt-2", "name": "框架协议", "direction_scope": "对外", "sort_order": 2 },
+    { "id": "dt-3", "name": "保密", "direction_scope": "对外", "sort_order": 3 },
+    { "id": "dt-4", "name": "采购", "direction_scope": "对内", "sort_order": 4 },
+    { "id": "dt-5", "name": "外包", "direction_scope": "对内", "sort_order": 5 },
+    { "id": "dt-6", "name": "劳动合同补充", "direction_scope": "对内", "sort_order": 6 },
+    { "id": "dt-7", "name": "补充协议", "direction_scope": "全部", "sort_order": 7 }
+  ],
+  "settings": {}
+}
