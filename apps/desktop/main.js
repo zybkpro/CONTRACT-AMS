@@ -4,7 +4,7 @@
  *  - 持有唯一 SQLite 主库；渲染进程通过 IPC 调用 API（服务停止时桌面依旧可用）
  *  - 内嵌可启停的局域网 HTTP 服务，供同网段 H5 / 其它 PC 访问同一份数据
  */
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
 
@@ -51,6 +51,26 @@ function registerIpc() {
   ipcMain.handle('api:invoke', wrap(({ method, path: p, query = {}, body = {}, token = '' }) => {
     const result = dispatch(method, p, new URLSearchParams(query), body, { source: 'ipc', trusted: true, token })
     return result.data
+  }))
+
+  // P0 附件修复：用系统默认应用预览文件（返回明确结果，替代 window.open(file://)）
+  ipcMain.handle('file:preview', wrap(async ({ filePath }) => {
+    const abs = String(filePath || '')
+    if (!abs || !fs.existsSync(abs)) throw new ApiError(404, '文件不存在或已被移动')
+    const r = await shell.openPath(abs)
+    if (r) throw new ApiError(500, `系统打开失败：${r}`)
+    return { ok: true }
+  }))
+  // P0 附件修复：另存为（用户选择目录，复制文件）
+  ipcMain.handle('file:save', wrap(async ({ filePath, fileName }) => {
+    const abs = String(filePath || '')
+    if (!abs || !fs.existsSync(abs)) throw new ApiError(404, '文件不存在或已被移动')
+    const { canceled, filePath: dest } = await dialog.showSaveDialog({
+      title: '保存文件', defaultPath: String(fileName || path.basename(abs)),
+    })
+    if (canceled || !dest) return { canceled: true }
+    fs.copyFileSync(abs, dest)
+    return { ok: true, savedPath: dest }
   }))
 
   ipcMain.handle('service:status', wrap(() => lan.status()))
@@ -119,6 +139,8 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   await db.init()
+  // V1.1 定时备份（按设置自动触发）
+  require(path.join(ROOT, 'packages', 'api-server', 'backup')).startAutoBackup()
   registerIpc()
   createWindow()
   if (db.getConfig().autoStart) {

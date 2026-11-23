@@ -3,14 +3,17 @@ import { ref, computed, watch } from 'vue'
 import { api, mediaUrl, downloadUrl, isDesktop } from '../api'
 import { toast, today, fileToDataURL, STATUS_META, DIRECTION_META, formatMoney, daysUntil, maskValue } from '../utils'
 import HistoryTab from './detail/HistoryTab.vue'
+import InvoicePanel from './InvoicePanel.vue'
 
 const props = defineProps({
   contract: { type: Object, default: null },
+  contracts: { type: Array, default: () => [] },
   role: { type: String, default: 'admin' },
   mask: { type: Boolean, default: true },
   remindDays: { type: Array, default: () => [30, 15, 7] },
+  maxFileMB: { type: Number, default: 50 },
 })
-const emit = defineEmits(['close', 'refresh', 'edit', 'status', 'approve'])
+const emit = defineEmits(['close', 'refresh', 'edit', 'status', 'approve', 'supplement'])
 
 const tab = ref('base')
 const busy = ref(false)
@@ -22,8 +25,15 @@ const uploadMain = ref(false)
 // 履约
 const msForm = ref({ name: '', plan_date: '', owner: '', remark: '' })
 // 收付款
-const ppForm = ref({ direction: '应收', seq: '', plan_amount: 0, plan_date: '', remark: '' })
-const prForm = ref({ plan_id: '', amount: 0, pay_date: today(), method: '银行转账', remark: '' })
+const ppForm = ref({ direction: '应收', seq: '', plan_amount: 0, plan_date: '', remark: '', nature: 'contract' })
+const prForm = ref({ plan_id: '', amount: 0, pay_date: today(), method: '银行转账', remark: '', nature: 'contract' })
+// V1.1 期次模板
+const genForm = ref({ template: 'once', direction: '应收', firstRatio: 30, confirm: '' })
+const NATURES = [
+  { k: 'contract', l: '合同款' }, { k: 'penalty', l: '违约金' },
+  { k: 'interest', l: '迟延履行利息/罚息' }, { k: 'occupation', l: '资金占用利息' }, { k: 'other', l: '其他' },
+]
+function natureLabel(k) { return NATURES.find((n) => n.k === k)?.l || k || '合同款' }
 // 审批
 const approveForm = ref({ action: 'approve', comment: '', level: 1 })
 
@@ -51,7 +61,7 @@ async function refreshDetail() {
 async function onPickFile(e) {
   const file = e.target.files?.[0]
   if (!file) return
-  if (file.size > 50 * 1024 * 1024) { toast('单文件不能超过 50MB', 'error'); return }
+  if (file.size > props.maxFileMB * 1024 * 1024) { toast(`单文件不能超过 ${props.maxFileMB}MB`, 'error'); return }
   busy.value = true
   try {
     const dataUrl = await fileToDataURL(file)
@@ -59,10 +69,26 @@ async function onPickFile(e) {
     toast('文件已上传', 'success'); changeNote.value = ''; e.target.value = ''; await refreshDetail()
   } catch (err) { toast(err.message, 'error') } finally { busy.value = false }
 }
-function openFile(f, download = false) {
-  api.logFileView({ fileId: f.id, action: download ? 'download' : 'view', operator: props.role })
-  const url = download ? downloadUrl(f.file_path) : mediaUrl(f.file_path)
-  window.open(url, '_blank')
+async function openFile(f, download = false) {
+  try {
+    const info = await api.resolveFile(f.id)
+    if (!info.exists) { toast('文件不存在或已被移动，请联系管理员', 'error'); return }
+    if (isDesktop) {
+      // 桌面端：走主进程 IPC，避免 window.open(file://) 被拦截导致"无反应"
+      const r = download
+        ? await window.contractams.file.save(info.absPath, info.fileName)
+        : await window.contractams.file.preview(info.absPath)
+      if (r?.ok === false) throw new Error(r.error || '操作失败')
+      if (r?.canceled) return
+      toast(download ? '文件已保存到指定目录' : '已用系统应用打开', 'success')
+    } else {
+      const url = download ? downloadUrl(f.file_path) : mediaUrl(f.file_path)
+      window.open(url, '_blank')
+      toast(download ? '已开始下载' : '已在新窗口打开', 'success')
+    }
+    // 成功才记日志（PRD 4.1.1）
+    api.logFileView({ fileId: f.id, action: download ? 'download' : 'view', operator: props.role })
+  } catch (e) { toast(`文件操作失败：${e.message}`, 'error') }
 }
 
 /* ---------- 履约节点 ---------- */
@@ -86,18 +112,31 @@ async function addPlan() {
   if (!(Number(ppForm.value.plan_amount) > 0)) { toast('计划金额须大于 0', 'error'); return }
   try {
     await api.addPaymentPlan({ contractId: props.contract.id, ...ppForm.value })
-    ppForm.value = { direction: '应收', seq: '', plan_amount: 0, plan_date: '', remark: '' }
+    ppForm.value = { direction: '应收', seq: '', plan_amount: 0, plan_date: '', remark: '', nature: 'contract' }
     toast('计划已添加', 'success'); await refreshDetail()
   } catch (e) { toast(e.message, 'error') }
 }
 async function delPlan(id) {
   try { await api.deletePaymentPlan(id); toast('计划已删除', 'success'); await refreshDetail() } catch (e) { toast(e.message, 'error') }
 }
+async function generatePlans() {
+  try {
+    const d = await api.generatePaymentPlans({ contractId: props.contract.id, ...genForm.value })
+    toast(`已按模板生成 ${d.generated} 期计划`, 'success')
+    genForm.value.confirm = ''
+    await refreshDetail()
+  } catch (e) {
+    if (e.message.includes('确认覆盖或追加') && window.confirm('已有计划，是否覆盖现有计划？')) {
+      try { const d = await api.generatePaymentPlans({ contractId: props.contract.id, ...genForm.value, confirm: 'overwrite' }); toast(`已覆盖生成 ${d.generated} 期计划`, 'success'); await refreshDetail() }
+      catch (e2) { toast(e2.message, 'error') }
+    } else toast(e.message, 'error')
+  }
+}
 async function addRecord() {
   if (!(Number(prForm.value.amount) > 0)) { toast('金额须大于 0', 'error'); return }
   try {
     await api.addPaymentRecord({ contractId: props.contract.id, ...prForm.value, operator: props.role })
-    prForm.value = { plan_id: '', amount: 0, pay_date: today(), method: '银行转账', remark: '' }
+    prForm.value = { plan_id: '', amount: 0, pay_date: today(), method: '银行转账', remark: '', nature: 'contract' }
     toast('流水已登记', 'success'); await refreshDetail()
   } catch (e) { toast(e.message, 'error') }
 }
@@ -128,12 +167,15 @@ async function doApprove() {
             <span v-if="dueInfo()" class="due-tag" :class="dueInfo().cls">{{ dueInfo().text }}</span>
           </div>
         </div>
-        <button class="icon-btn" @click="emit('close')">✕</button>
+        <div class="drawer-head-actions">
+          <button v-if="canEdit && !contract.parent_id" class="btn sm" @click="emit('supplement', contract)">创建补充协议</button>
+          <button class="icon-btn" @click="emit('close')">✕</button>
+        </div>
       </div>
       <div class="drawer-tabs">
         <button v-for="t in [
           { k:'base', l:'基本信息' }, { k:'files', l:'文件与版本' }, { k:'ms', l:'履约节点' },
-          { k:'pay', l:'收付款' }, { k:'approve', l:'审批' }, { k:'logs', l:'生命周期日志' }
+          { k:'pay', l:'收付款' }, { k:'invoice', l:'发票' }, { k:'approve', l:'审批' }, { k:'logs', l:'生命周期日志' }
         ]" :key="t.k" :class="{ active: tab === t.k }" @click="tab = t.k">{{ t.l }}</button>
       </div>
       <div class="drawer-body">
@@ -163,6 +205,7 @@ async function doApprove() {
             <input v-model="changeNote" class="inline-input" placeholder="变更说明（谁在何时换了哪一版）" />
             <label class="inline-check"><input v-model="uploadMain" type="checkbox" /> 设为正文</label>
           </div>
+          <div v-if="busy" class="hint">正在读取并上传文件，大文件（100MB 级）可能需要几十秒，请勿关闭窗口…</div>
           <table class="mini-table">
             <thead><tr><th>文件</th><th>版本</th><th>正文</th><th>变更说明</th><th>大小</th><th>上传人</th><th>操作</th></tr></thead>
             <tbody>
@@ -171,7 +214,7 @@ async function doApprove() {
                 <td>v{{ f.version }}</td>
                 <td><span v-if="f.is_main" class="tag-cell tag-cyan">正文</span><span v-else class="muted">附件</span></td>
                 <td>{{ f.change_note || '—' }}</td>
-                <td>{{ (f.size / 1024).toFixed(0) }} KB</td>
+                <td>{{ f.size >= 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB' }}</td>
                 <td>{{ f.uploaded_by }}</td>
                 <td>
                   <button class="mini-btn" @click="openFile(f, false)">预览</button>
@@ -226,13 +269,22 @@ async function doApprove() {
             <input v-model="ppForm.seq" class="inline-input short" placeholder="期次" />
             <input v-model.number="ppForm.plan_amount" type="number" class="inline-input short" placeholder="计划金额" />
             <input v-model="ppForm.plan_date" type="date" />
+            <select v-model="ppForm.nature"><option v-for="n in NATURES" :key="n.k" :value="n.k">{{ n.l }}</option></select>
             <button class="btn primary sm" @click="addPlan">添加计划</button>
           </div>
+          <div v-if="canEdit" class="inline-form" style="margin-top:6px">
+            <span class="muted" style="font-size:12px">按模板生成：</span>
+            <select v-model="genForm.template"><option value="once">一次性</option><option value="down-tail">首付+尾款</option><option value="quarterly">按季度</option></select>
+            <select v-model="genForm.direction"><option>应收</option><option>应付</option></select>
+            <button class="btn sm" @click="generatePlans">生成计划</button>
+            <span class="muted" style="font-size:11px">已有计划会提示覆盖</span>
+          </div>
           <table class="mini-table">
-            <thead><tr><th>方向</th><th>期次</th><th>计划金额</th><th>计划日期</th><th>状态</th><th>到账合计</th><th></th></tr></thead>
+            <thead><tr><th>方向</th><th>期次</th><th>性质</th><th>计划金额</th><th>计划日期</th><th>状态</th><th>到账合计</th><th></th></tr></thead>
             <tbody>
               <tr v-for="pp in contract.payment_plans" :key="pp.id">
-                <td>{{ pp.direction }}</td><td>{{ pp.seq }}</td><td>¥{{ formatMoney(pp.plan_amount) }}</td>
+                <td>{{ pp.direction }}</td><td>{{ pp.seq }}</td><td>{{ natureLabel(pp.nature) }}</td>
+                <td>¥{{ formatMoney(pp.plan_amount) }}</td>
                 <td>{{ pp.plan_date }}</td><td><span class="tag-cell tag-gray">{{ pp.status }}</span></td>
                 <td>¥{{ formatMoney((contract.payment_records || []).filter(r => r.plan_id === pp.id).reduce((s,r)=>s+Number(r.amount||0),0)) }}</td>
                 <td><button v-if="canEdit" class="mini-btn danger" @click="delPlan(pp.id)">✕</button></td>
@@ -245,22 +297,30 @@ async function doApprove() {
             <input v-model.number="prForm.amount" type="number" class="inline-input short" placeholder="金额" />
             <input v-model="prForm.pay_date" type="date" />
             <input v-model="prForm.method" class="inline-input short" placeholder="方式" />
+            <select v-model="prForm.nature"><option v-for="n in NATURES" :key="n.k" :value="n.k">{{ n.l }}</option></select>
             <button class="btn primary sm" @click="addRecord">登记</button>
           </div>
           <table class="mini-table">
-            <thead><tr><th>日期</th><th>金额</th><th>方式</th><th>关联期次</th><th>备注</th><th></th></tr></thead>
+            <thead><tr><th>日期</th><th>金额</th><th>性质</th><th>方式</th><th>关联期次</th><th>备注</th><th></th></tr></thead>
             <tbody>
               <tr v-for="pr in contract.payment_records" :key="pr.id">
-                <td>{{ pr.pay_date }}</td><td>¥{{ formatMoney(pr.amount) }}</td><td>{{ pr.method }}</td>
+                <td>{{ pr.pay_date }}</td><td>¥{{ formatMoney(pr.amount) }}</td>
+                <td><span class="tag-cell" :class="pr.nature === 'contract' ? 'tag-gray' : 'tag-amber'">{{ natureLabel(pr.nature) }}</span></td>
+                <td>{{ pr.method }}</td>
                 <td>{{ contract.payment_plans?.find(p=>p.id===pr.plan_id)?.seq || '计划外' }}</td><td>{{ pr.remark }}</td>
                 <td><button v-if="canFinance" class="mini-btn danger" @click="delRecord(pr.id)">✕</button></td>
               </tr>
-              <tr v-if="!contract.payment_records?.length"><td colspan="6" class="empty-row">暂无到账流水</td></tr>
+              <tr v-if="!contract.payment_records?.length"><td colspan="7" class="empty-row">暂无到账流水</td></tr>
             </tbody>
           </table>
         </div>
 
         <!-- 审批 -->
+        <!-- 发票（V1.1） -->
+        <div v-else-if="tab === 'invoice'">
+          <InvoicePanel mode="detail" :contract="contract" :contracts="contracts" :can-edit="canEdit" />
+        </div>
+
         <div v-else-if="tab === 'approve'">
           <div class="approve-box">
             <div class="approve-status">当前状态：<span class="tag-cell" :class="STATUS_META[contract.status]?.tag">{{ contract.status }}</span></div>

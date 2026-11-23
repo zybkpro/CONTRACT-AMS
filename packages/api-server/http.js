@@ -116,7 +116,7 @@ class LanServer {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, X-CONTRACTAMS-Token, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, X-CONTRACTAMS-Token, X-CONTRACTAMS-Session, Authorization',
       'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
       ...headers,
     })
@@ -192,17 +192,56 @@ class LanServer {
         return this.send(res, 401, { ok: false, error: '需要局域网访问口令', code: 'UNAUTHORIZED' })
       }
 
-      // 本地媒体文件
+      // 本地媒体文件：支持 Range（PDF 内嵌预览必需），文件不存在明确 404
       if (p.startsWith('/media/')) {
-        const target = path.resolve(db.MEDIA_DIR, decodeURIComponent(p.slice('/media/'.length)))
-        if (!target.startsWith(path.resolve(db.MEDIA_DIR) + path.sep) || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
-          return this.send(res, 404, { ok: false, error: '文件不存在' })
+        const target = db.mediaFilePath(p)
+        if (!target || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
+          return this.send(res, 404, { ok: false, error: '文件不存在或已被移动' })
         }
-        const headers = { 'Content-Type': MIME[path.extname(target).toLowerCase()] || 'application/octet-stream' }
+        const stat = fs.statSync(target)
+        const headers = {
+          'Content-Type': MIME[path.extname(target).toLowerCase()] || 'application/octet-stream',
+          'Accept-Ranges': 'bytes',
+        }
         if (url.searchParams.get('download') === '1') {
           headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(target))}`
         }
-        return this.send(res, 200, fs.readFileSync(target), headers)
+        // Range 请求 → 206 分段
+        const range = req.headers.range
+        if (range) {
+          const m = /^bytes=(\d*)-(\d*)$/.exec(range)
+          if (m) {
+            let start = m[1] === '' ? 0 : parseInt(m[1], 10)
+            let end = m[2] === '' ? stat.size - 1 : parseInt(m[2], 10)
+            if (start >= stat.size || end < start) {
+              headers['Content-Range'] = `bytes */${stat.size}`
+              return this.send(res, 416, Buffer.alloc(0), headers)
+            }
+            end = Math.min(end, stat.size - 1)
+            headers['Content-Range'] = `bytes ${start}-${end}/${stat.size}`
+            headers['Content-Length'] = end - start + 1
+            res.writeHead(206, {
+              'Content-Type': headers['Content-Type'],
+              'Content-Range': headers['Content-Range'],
+              'Content-Length': headers['Content-Length'],
+              'Accept-Ranges': 'bytes',
+              'Cache-Control': 'no-store',
+              'Access-Control-Allow-Origin': '*',
+              ...(headers['Content-Disposition'] ? { 'Content-Disposition': headers['Content-Disposition'] } : {}),
+            })
+            return fs.createReadStream(target, { start, end }).pipe(res)
+          }
+        }
+        headers['Content-Length'] = stat.size
+        res.writeHead(200, {
+          'Content-Type': headers['Content-Type'],
+          'Content-Length': headers['Content-Length'],
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+          ...(headers['Content-Disposition'] ? { 'Content-Disposition': headers['Content-Disposition'] } : {}),
+        })
+        return fs.createReadStream(target).pipe(res)
       }
 
       // 授权激活（异步远程校验，仅本机 / 已鉴权客户端可操作）

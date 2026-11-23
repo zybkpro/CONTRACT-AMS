@@ -149,5 +149,60 @@ function call(method, p, body = {}, query = {}) {
   assert.ok(call('POST', '/api/login', { username: 'admin', password: 'admin888' }).token)
   console.log('✓ 修改密码：校验原密码/长度，改后新密码可登录')
 
+  // ===== V1.1 增量 =====
+  // 18. 数据迁移：新表新字段
+  const cols = db.all('PRAGMA table_info(contract)').map((c) => c.name)
+  assert.ok(['amount_ex_tax','tax_amount','tax_rate','category_id'].every((c) => cols.includes(c)))
+  assert.ok(db.PAY_NATURES.includes('penalty'))
+  console.log('✓ V1.1 迁移：税金/分类字段 + 发票表 + nature 枚举')
+
+  // 19. 在签收入/支出分列
+  const dashV11 = call('GET', '/api/dashboard')
+  assert.ok(dashV11.inSignIncome >= 0 && dashV11.inSignExpense >= 0 && dashV11.inSignNet === dashV11.inSignIncome - dashV11.inSignExpense)
+  const projDash = call('GET', '/api/dashboard', {}, { projectId: 'prj-1' })
+  assert.ok(projDash.total <= dashV11.total)
+  console.log('✓ 在签收入/支出分列 + 项目下钻过滤')
+
+  // 20. 补充协议一键创建：编号 -n 递增
+  const main = call('GET', '/api/contracts', {}, {}).list.find((c) => !c.parent_id)
+  const mkSupp = () => call('POST', '/api/contracts', {
+    contract_no: '', title: main.title + '-补充协议', direction: main.direction, type: main.type,
+    status: '草稿', party_id: main.party_id, parent_id: main.id, amount: 10000, confirmBlacklist: true,
+  })
+  const supp1 = mkSupp(), supp2 = mkSupp()
+  assert.ok(supp1.contract_no.endsWith('-1') && supp2.contract_no.endsWith('-2'))
+  assert.strictEqual(call('GET', `/api/contracts/${main.id}`, {}, {}).children.length, 2)
+  assert.throws(() => call('DELETE', `/api/contracts/${main.id}`), /存在补充协议/)
+  console.log('✓ 补充协议：编号 -n 递增 / 主合同禁删')
+
+  // 21. 发票登记：税额计算 / 作废旧计
+  const inv = call('POST', '/api/invoices', { contractId: main.id, direction: '开票', invoice_type: '专票',
+    invoice_no: 'V11-001', invoice_date: '2026-11-22', amount_ex_tax: 10000, amount_incl_tax: 11300, tax_rate: 13, status: '已开具' })
+  assert.strictEqual(inv.tax_amount, 1300)
+  assert.strictEqual(call('GET', `/api/contracts/${main.id}/invoices/summary`, {}, {}).issued, 11300)
+  assert.throws(() => call('PUT', `/api/invoices/${inv.id}`, { status: '作废' }), /作废必须填写原因/)
+  call('PUT', `/api/invoices/${inv.id}`, { status: '作废', voidReason: '测试作废' })
+  assert.strictEqual(call('GET', `/api/contracts/${main.id}/invoices/summary`, {}, {}).issued, 0)
+  console.log('✓ 发票：税额自动算 / 作废需原因 / 作废不计入合计')
+
+  // 22. 期次模板 + 罚息性质不污染回款率
+  const gen = call('POST', '/api/payment-plans/generate', { contractId: contract.id, template: 'down-tail', direction: '应收', total: 100000, confirm: 'overwrite' })
+  assert.strictEqual(gen.generated, 2)
+  const beforeRate = call('GET', '/api/dashboard', {}, {}).finance.receiveRate
+  call('POST', '/api/payment-records', { contractId: contract.id, amount: 9999, pay_date: '2026-11-22', nature: 'penalty' })
+  assert.strictEqual(call('GET', '/api/dashboard', {}, {}).finance.receiveRate, beforeRate)
+  assert.ok(call('GET', '/api/dashboard', {}, {}).penalties >= 9999)
+  console.log('✓ 期次模板生成 + 罚息不污染回款率')
+
+  // 23. 文件解析（P0 附件修复）：存在性反馈
+  const dataUrlV11 = 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4 test').toString('base64')
+  const up = call('POST', `/api/contracts/${contract.id}/files`, { fileName: 'V11.pdf', dataUrl: dataUrlV11, isMain: true })
+  const file = Array.isArray(up) ? up[0] : up
+  const info = call('POST', '/api/files/resolve', { fileId: file.id })
+  assert.ok(info.exists && info.absPath && info.ext === '.pdf')
+  require('fs').unlinkSync(info.absPath)
+  assert.strictEqual(call('POST', '/api/files/resolve', { fileId: file.id }).exists, false)
+  console.log('✓ 附件解析：存在/缺失明确反馈（P0 修复）')
+
   console.log('\n✅ 全部冒烟测试通过')
 })().catch((e) => { console.error('❌ 测试失败:', e.message); console.error(e.stack); process.exit(1) })

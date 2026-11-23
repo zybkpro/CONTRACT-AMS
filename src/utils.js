@@ -128,7 +128,7 @@ function writeBook(aoa, sheetName, filename, widths) {
 export function exportContractsToExcel(contracts, columnKeys, filename = '合同台账.xlsx', opts = {}) {
   const keys = columnKeys || EXPORT_FIELDS.map((f) => f.key)
   const fields = keys.map((k) => EXPORT_FIELDS.find((f) => f.key === k)).filter(Boolean)
-  const header = fields.map((f) => f.label)
+  const header = fields.map((f) => opts.labels?.[f.key] || f.label)
   const maskKeys = opts.mask ? ['party_name'] : []
   const rows = contracts.map((c) => fields.map((f) => {
     if (f.key === 'amount') return Number(c.amount) || 0
@@ -153,6 +153,14 @@ export function exportPaymentsToExcel(contracts, filename = '收付款汇总.xls
       s.received || 0, s.paid || 0, s.remainIn || 0, s.remainOut || 0]
   })
   writeBook([header, ...rows], '收付款', filename, [16, 30, 8, 14, 14, 14, 12, 12, 12, 12])
+}
+
+export function exportInvoicesToExcel(invoices, filename = '发票登记.xlsx') {
+  const header = ['发票号码', '发票代码', '合同编号', '票种方向', '发票类型', '开票日期', '不含税金额', '税额', '价税合计', '税率', '销方', '购方', '状态', '备注']
+  const rows = invoices.map((i) => [i.invoice_no, i.invoice_code || '', i.contract_no || '', i.direction,
+    i.invoice_type, i.invoice_date, Number(i.amount_ex_tax) || 0, Number(i.tax_amount) || 0,
+    Number(i.amount_incl_tax) || 0, i.tax_rate || 0, i.seller_name || '', i.buyer_name || '', i.status, i.remark || ''])
+  writeBook([header, ...rows], '发票', filename, [18, 18, 16, 10, 10, 14, 14, 12, 14, 8, 24, 24, 10, 30])
 }
 
 /** 解析导入的合同 Excel（首行为表头） */

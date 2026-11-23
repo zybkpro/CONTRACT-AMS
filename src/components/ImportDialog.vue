@@ -19,6 +19,12 @@ async function onFile(e) {
     toast(`已读取 ${parsed.value.length} 行，请确认导入`, 'info')
   } catch (err) { toast(err.message, 'error') }
 }
+function copyFailures() {
+  if (!result.value?.failed?.length) return
+  const text = result.value.failed.map((f) => `第 ${f.row} 行：${f.reason}`).join('\n')
+  try { navigator.clipboard.writeText(text); toast('失败明细已复制', 'success') }
+  catch (_) { toast('复制失败，请手动选择文本', 'error') }
+}
 async function doImport() {
   if (!parsed.value.length) { toast('请先选择 Excel 文件', 'error'); return }
   busy.value = true
@@ -49,7 +55,9 @@ async function doImport() {
           </table>
         </div>
         <div v-if="result" class="import-result">
-          <div>成功 {{ result.created }} 条，失败 {{ result.failed.length }} 条</div>
+          <div>成功 {{ result.created }} 条，失败 {{ result.failed.length }} 条
+            <button v-if="result.failed.length" class="link-btn" @click="copyFailures">复制失败明细</button>
+          </div>
           <div v-for="f in result.failed" :key="f.row" class="err-line">第 {{ f.row }} 行：{{ f.reason }}</div>
         </div>
       </div>

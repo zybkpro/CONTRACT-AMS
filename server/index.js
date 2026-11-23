@@ -23,6 +23,9 @@ function arg(name, fallback) {
   if (process.argv.includes('--https')) patch.https = true
   if (Object.keys(patch).length) db.saveConfig(patch)
 
+  // V1.1 定时备份（按设置自动触发）
+  require(path.join(__dirname, '..', 'packages', 'api-server', 'backup')).startAutoBackup()
+
   const lan = new LanServer()
   const status = await lan.start()
   console.log('──────────────────────────────────────────────')

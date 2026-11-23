@@ -9,6 +9,7 @@ const props = defineProps({
   parties: { type: Array, default: () => [] },
   contracts: { type: Array, default: () => [] },
   dictTypes: { type: Array, default: () => [] },
+  dictCategories: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['saved', 'close'])
 
@@ -18,6 +19,8 @@ const err = ref('')
 const confirmBlacklist = ref(false)
 
 const isEdit = computed(() => !!props.model?.id)
+// 补充协议：带 parent_id 的新建，编号由后端按 {主编号}-n 生成
+const isSupplement = computed(() => !isEdit.value && !!props.model?.parent_id)
 const masterOptions = computed(() => props.contracts.filter((c) => !c.parent_id && (!isEdit.value || c.id !== props.model.id)))
 const typesForDirection = computed(() => {
   const list = props.dictTypes.filter((d) => d.direction_scope === '全部' || d.direction_scope === form.value.direction)
@@ -29,10 +32,11 @@ function reset() {
     contract_no: '', title: '', direction: '对外', type: '销售', status: '草稿',
     project_id: '', party_id: '', parent_id: '', our_entity: '', amount: 0, currency: 'CNY',
     sign_date: today(), start_date: '', end_date: '', auto_renew: false, terminate_note: '', owner: '', remark: '',
+    amount_ex_tax: 0, tax_amount: 0, tax_rate: 0, category_id: '',
   }
   err.value = ''
   confirmBlacklist.value = false
-  if (!isEdit.value) {
+  if (!isEdit.value && !isSupplement.value) {
     api.nextCode(form.value.direction).then((r) => { if (!form.value.contract_no) form.value.contract_no = r.code }).catch(() => {})
   }
 }
@@ -42,6 +46,25 @@ watch(() => props.model, reset)
 watch(() => form.value.direction, (d) => {
   if (!typesForDirection.value.includes(form.value.type)) form.value.type = typesForDirection.value[0] || '销售'
 })
+
+// V1.1 含税/不含税互算
+function calcTax(changed) {
+  const f = form.value
+  const rate = Number(f.tax_rate) || 0
+  if (changed === 'incl') {
+    const ex = Math.round((Number(f.amount_incl_tax || 0) / (1 + rate / 100)) * 100) / 100
+    f.amount_ex_tax = ex
+    f.tax_amount = Math.round((Number(f.amount_incl_tax || 0) - ex) * 100) / 100
+    f.amount = f.amount_incl_tax
+  } else if (changed === 'tax') {
+    f.amount = Math.round((Number(f.amount_ex_tax || 0) + Number(f.tax_amount || 0)) * 100) / 100
+    f.amount_incl_tax = f.amount
+  } else {
+    f.tax_amount = Math.round((Number(f.amount_ex_tax || 0) * rate / 100) * 100) / 100
+    f.amount = Math.round((Number(f.amount_ex_tax || 0) + Number(f.tax_amount)) * 100) / 100
+    f.amount_incl_tax = f.amount
+  }
+}
 
 async function save() {
   err.value = ''
@@ -64,11 +87,11 @@ async function save() {
   <div class="modal-mask" @click.self="emit('close')">
     <div class="modal modal-lg">
       <div class="modal-head">
-        <h3>{{ isEdit ? '编辑合同' : '新增合同' }}</h3>
+        <h3>{{ isEdit ? '编辑合同' : (isSupplement ? '创建补充协议' : '新增合同') }}</h3>
         <button class="icon-btn" @click="emit('close')">✕</button>
       </div>
       <div class="modal-body form-grid">
-        <label class="field"><span>合同编号 <i>*</i></span><input v-model="form.contract_no" placeholder="留空自动生成" /></label>
+        <label class="field"><span>合同编号 <i>*</i></span><input v-model="form.contract_no" :placeholder="isSupplement ? '留空自动生成（原编号-n）' : '留空自动生成'" /></label>
         <label class="field"><span>合同名称 <i>*</i></span><input v-model="form.title" placeholder="如：智慧园区平台建设合同" /></label>
         <label class="field"><span>方向 <i>*</i></span>
           <select v-model="form.direction"><option v-for="d in DIRECTIONS" :key="d">{{ d }}</option></select>
@@ -86,7 +109,13 @@ async function save() {
           <select v-model="form.party_id"><option value="">— 请选择 —</option><option v-for="p in parties" :key="p.id" :value="p.id">{{ p.name }}（{{ p.role }}）</option></select>
         </label>
         <label class="field"><span>我方主体</span><input v-model="form.our_entity" placeholder="签约我方公司" /></label>
-        <label class="field"><span>金额（元）</span><input v-model.number="form.amount" type="number" min="0" step="0.01" /></label>
+        <label class="field"><span>金额（价税合计）</span><input v-model.number="form.amount" type="number" min="0" step="0.01" @change="form.amount_incl_tax = form.amount; calcTax('incl')" /></label>
+        <label class="field"><span>费用分类</span>
+          <select v-model="form.category_id"><option value="">— 未分类 —</option><option v-for="c in dictCategories" :key="c.id" :value="c.id">{{ c.name }}</option></select>
+        </label>
+        <label class="field"><span>税率（%）</span><input v-model.number="form.tax_rate" type="number" min="0" step="0.01" @change="calcTax('ex')" /></label>
+        <label class="field"><span>不含税金额</span><input v-model.number="form.amount_ex_tax" type="number" min="0" step="0.01" @change="calcTax('ex')" /></label>
+        <label class="field"><span>税额</span><input v-model.number="form.tax_amount" type="number" min="0" step="0.01" @change="calcTax('tax')" /></label>
         <label class="field"><span>币种</span><input v-model="form.currency" /></label>
         <label class="field"><span>签订日</span><input v-model="form.sign_date" type="date" /></label>
         <label class="field"><span>开始日</span><input v-model="form.start_date" type="date" /></label>

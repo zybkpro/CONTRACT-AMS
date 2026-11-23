@@ -11,7 +11,7 @@ const props = defineProps({
   mask: { type: Boolean, default: true },
   canEdit: { type: Boolean, default: true },
 })
-const emit = defineEmits(['refresh', 'new-contract'])
+const emit = defineEmits(['refresh', 'new-contract', 'view-in-ledger', 'view-in-board'])
 
 const keyword = ref('')
 const dialog = ref(false)
@@ -83,6 +83,10 @@ function contractsOf(x) {
         </div>
         <div class="ec-contracts">
           <span v-for="c in contractsOf(x).slice(0,6)" :key="c.id" class="tag-cell tag-gray" style="margin:2px 4px 0 0">{{ c.contract_no }}</span>
+          <div v-if="mode === 'project'" class="ec-quick-links">
+            <button class="link-btn" @click="emit('view-in-ledger', x)">在台账中查看</button>
+            <button class="link-btn" @click="emit('view-in-board', x)">在看板中查看</button>
+          </div>
           <button class="link-btn" @click="emit('new-contract', x)">+ 为此{{ mode === 'project' ? '项目' : '相对方' }}建合同</button>
         </div>
         <div v-if="canEdit" class="ec-foot">

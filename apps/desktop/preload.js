@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('contractams', {
   mediaDir,
   invoke: (method, path, query = {}, body = {}, token = '') =>
     ipcRenderer.invoke('api:invoke', { method, path, query, body, token }),
+  // P0 附件修复：系统预览 / 另存为
+  file: {
+    preview: (filePath) => ipcRenderer.invoke('file:preview', { filePath }),
+    save: (filePath, fileName) => ipcRenderer.invoke('file:save', { filePath, fileName }),
+  },
   service: {
     status: () => ipcRenderer.invoke('service:status'),
     start: () => ipcRenderer.invoke('service:start'),

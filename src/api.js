@@ -74,7 +74,7 @@ const body = (method, data) => ({ method, body: JSON.stringify(data || {}) })
 export const api = {
   bootstrap: () => request('/api/bootstrap'),
   health: () => request('/api/health'),
-  dashboard: () => request('/api/dashboard'),
+  dashboard: (projectId) => request(`/api/dashboard${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
   nextCode: (direction) => request(`/api/next-code?direction=${encodeURIComponent(direction)}`),
   logs: (contractId) => request(`/api/logs${contractId ? `?contractId=${encodeURIComponent(contractId)}` : ''}`),
 
@@ -99,6 +99,7 @@ export const api = {
   uploadFile: (cid, data) => request(`/api/contracts/${cid}/files`, body('POST', data)),
   contractFiles: (cid) => request(`/api/contracts/${cid}/files`),
   deleteFile: (id) => request(`/api/contract-files/${id}`, body('DELETE')),
+  resolveFile: (fileId) => request('/api/files/resolve', body('POST', { fileId })),
   logFileView: (data) => request('/api/files/view-log', body('POST', data)),
 
   // 履约 / 收付款
@@ -106,18 +107,30 @@ export const api = {
   updateMilestone: (id, data) => request(`/api/milestones/${id}`, body('PUT', data)),
   deleteMilestone: (id) => request(`/api/milestones/${id}`, body('DELETE')),
   addPaymentPlan: (data) => request('/api/payment-plans', body('POST', data)),
+  generatePaymentPlans: (data) => request('/api/payment-plans/generate', body('POST', data)),
   updatePaymentPlan: (id, data) => request(`/api/payment-plans/${id}`, body('PUT', data)),
   deletePaymentPlan: (id) => request(`/api/payment-plans/${id}`, body('DELETE')),
   addPaymentRecord: (data) => request('/api/payment-records', body('POST', data)),
   deletePaymentRecord: (id) => request(`/api/payment-records/${id}`, body('DELETE')),
 
   // 统计 / 字典 / 设置 / 导入
+  // V1.1 发票
+  invoices: (params = {}) => request(`/api/invoices${params.contractId ? `?contractId=${encodeURIComponent(params.contractId)}` : ''}`),
+  invoiceSummary: (cid) => request(`/api/contracts/${cid}/invoices/summary`),
+  createInvoice: (data) => request('/api/invoices', body('POST', data)),
+  updateInvoice: (id, data) => request(`/api/invoices/${id}`, body('PUT', data)),
+  deleteInvoice: (id) => request(`/api/invoices/${id}`, body('DELETE')),
+
   statsByProject: () => request('/api/stats/by-project'),
   statsByParty: () => request('/api/stats/by-party'),
   dictTypes: () => request('/api/dict-types'),
   addDictType: (data) => request('/api/dict-types', body('POST', data)),
   deleteDictType: (id) => request(`/api/dict-types/${id}`, body('DELETE')),
+  dictCategories: () => request('/api/dict-categories'),
+  addDictCategory: (data) => request('/api/dict-categories', body('POST', data)),
+  deleteDictCategory: (id) => request(`/api/dict-categories/${id}`, body('DELETE')),
   saveSettings: (settings) => request('/api/settings', body('PUT', settings)),
+  runBackup: (dir) => request('/api/backup/run', body('POST', { dir })),
   importContracts: (rows) => request('/api/import', body('POST', { rows })),
 
   auth: (token) => request('/api/auth', body('POST', { token })),

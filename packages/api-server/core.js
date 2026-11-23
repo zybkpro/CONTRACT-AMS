@@ -17,12 +17,14 @@ const WRITE_METHODS = ['POST', 'PUT', 'DELETE', 'PATCH']
 const READONLY_ALLOWED = ['/api/auth', '/api/bootstrap', '/api/h5/register-payment']
 
 const CONTRACT_FIELDS = ['contract_no', 'title', 'direction', 'type', 'status', 'project_id', 'party_id', 'parent_id',
-  'our_entity', 'amount', 'currency', 'sign_date', 'start_date', 'end_date', 'auto_renew', 'terminate_note', 'owner', 'remark']
+  'our_entity', 'amount', 'currency', 'sign_date', 'start_date', 'end_date', 'auto_renew', 'terminate_note', 'owner', 'remark',
+  'amount_ex_tax', 'tax_amount', 'tax_rate', 'category_id']
 const FIELD_LABEL = {
   contract_no: '合同编号', title: '合同名称', direction: '方向', type: '类型', status: '状态',
   project_id: '项目', party_id: '相对方', parent_id: '主合同', our_entity: '我方主体', amount: '金额',
   currency: '币种', sign_date: '签订日', start_date: '开始日', end_date: '结束日',
   auto_renew: '自动续约', terminate_note: '终止条件', owner: '负责人', remark: '备注', archived: '归档',
+  amount_ex_tax: '不含税金额', tax_amount: '税额', tax_rate: '税率', category_id: '费用分类',
 }
 
 /* ==================== 通用辅助 ==================== */
@@ -79,6 +81,8 @@ function sanitizeContract(body, base = {}) {
     if (k in body) c[k] = body[k] == null ? '' : (typeof body[k] === 'number' ? body[k] : String(body[k]).trim())
   }
   c.amount = Number.isFinite(Number(c.amount)) ? Math.round(Number(c.amount) * 100) / 100 : 0
+  for (const k of ['amount_ex_tax', 'tax_amount', 'tax_rate'])
+    c[k] = Number.isFinite(Number(c[k])) ? Number(c[k]) : 0
   c.auto_renew = c.auto_renew === true || c.auto_renew === 1 || c.auto_renew === '1' || c.auto_renew === '是' ? 1 : 0
   c.currency = c.currency || 'CNY'
   c.status = c.status || '草稿'
@@ -121,11 +125,19 @@ function dashboard(list) {
   const today = new Date(); today.setHours(0, 0, 0, 0)
   const soon = [], overdue = []
   let inProgress = 0, archived = 0
+  // V1.1：在签收入/支出分列（方向=对外/对内 且 状态∈已签署/履约中）
+  const SIGNED = ['已签署', '履约中']
+  let inSignIncome = 0, inSignExpense = 0
+  const inSign = (c) => SIGNED.includes(c.status) && !c.archived
   for (const c of list) {
     byStatus[c.status] = (byStatus[c.status] || 0) + 1
     if (c.direction in byDirection) byDirection[c.direction]++
     if (c.status === '履约中') inProgress++
     if (c.archived) archived++
+    if (inSign(c)) {
+      if (c.direction === '对外') inSignIncome += Number(c.amount || 0)
+      else if (c.direction === '对内') inSignExpense += Number(c.amount || 0)
+    }
     if (c.end_date && !c.archived && !['已完成', '已终止'].includes(c.status)) {
       const t = new Date(c.end_date + 'T00:00:00').getTime()
       const days = Math.round((t - today.getTime()) / 86400000)
@@ -135,16 +147,25 @@ function dashboard(list) {
   }
   soon.sort((a, b) => a.days - b.days)
   overdue.sort((a, b) => a.days - b.days)
-  // 收付款汇总（全局）
-  const sum = (sql, args = []) => Number(db.one(sql, args).n || 0)
-  const planIn = sum("SELECT COALESCE(SUM(plan_amount),0) AS n FROM payment_plan WHERE direction='应收'")
-  const planOut = sum("SELECT COALESCE(SUM(plan_amount),0) AS n FROM payment_plan WHERE direction='应付'")
-  const received = sum(`SELECT COALESCE(SUM(r.amount),0) AS n FROM payment_record r LEFT JOIN payment_plan p ON p.id=r.plan_id WHERE p.direction='应收' OR p.id IS NULL`)
-  const paid = sum(`SELECT COALESCE(SUM(r.amount),0) AS n FROM payment_record r JOIN payment_plan p ON p.id=r.plan_id WHERE p.direction='应付'`)
+  // 收付款汇总：基于当前 list（支持按项目过滤），只统计合同款（nature='contract'）
+  const ids = new Set(list.map((c) => c.id))
+  const plans = db.all('SELECT * FROM payment_plan').filter((p) => ids.has(p.contract_id))
+  const recs = db.all('SELECT * FROM payment_record').filter((r) => ids.has(r.contract_id))
+  const planById = new Map(plans.map((p) => [p.id, p]))
+  const num = (v) => Number(v || 0)
+  const planIn = plans.filter((p) => p.direction === '应收' && p.nature === 'contract').reduce((s, p) => s + num(p.plan_amount), 0)
+  const planOut = plans.filter((p) => p.direction === '应付' && p.nature === 'contract').reduce((s, p) => s + num(p.plan_amount), 0)
+  // 实际到账：合同款且（关联应收计划 或 无计划）；应付：关联应付计划
+  const received = recs.filter((r) => r.nature === 'contract' && (!r.plan_id || planById.get(r.plan_id)?.direction === '应收')).reduce((s, r) => s + num(r.amount), 0)
+  const paid = recs.filter((r) => r.nature === 'contract' && planById.get(r.plan_id)?.direction === '应付').reduce((s, r) => s + num(r.amount), 0)
+  // V1.1 可开关：罚息类合计（展示用，不进回款率）
+  const penalties = recs.filter((r) => r.nature !== 'contract').reduce((s, r) => s + num(r.amount), 0)
   return {
     total: list.length, totalAmount, inProgress, archived, byStatus, byDirection,
+    inSignIncome, inSignExpense, inSignNet: inSignIncome - inSignExpense,
     soon: soon.slice(0, 10), overdue: overdue.slice(0, 10),
     soonCount: soon.length, overdueCount: overdue.length,
+    penalties,
     finance: { planIn, planOut, received, paid, remainIn: planIn - received, remainOut: planOut - paid,
       receiveRate: planIn ? Math.round(received / planIn * 100) : 0 },
   }
@@ -297,6 +318,14 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     return { status: 200, data }
   }
   if (p === '/api/backup' && method === 'GET') return { status: 200, data: db.bootstrap() }
+  // V1.1：手动备份为 zip（可指定目录）
+  if (p === '/api/backup/run' && method === 'POST') {
+    if (role !== 'admin') throw new ApiError(403, '仅管理员可备份')
+    const backup = require('./backup')
+    const r = backup.createBackup(String(body.dir || '').trim())
+    db.addLog({ event_type: '手动备份', content: `手动备份：${path.basename(r.file)}（${(r.size / 1048576).toFixed(1)}MB）`, operator: currentUser?.name || '', source: ctx.source || 'desktop' })
+    return { status: 200, data: r }
+  }
   if (p === '/api/next-code' && method === 'GET')
     return { status: 200, data: { code: db.nextCode(query.get('direction') || '对外') } }
   if (p === '/api/dashboard' && method === 'GET') {
@@ -306,6 +335,10 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
       const ids = new Set(owned.map((x) => x.id))
       list = list.filter((c) => ids.has(c.project_id))
     }
+    // V1.1：按项目下钻（全部 / 指定项目 / 未归属）
+    const pid = query.get('projectId')
+    if (pid === '__none__') list = list.filter((c) => !c.project_id)
+    else if (pid && pid !== 'all') list = list.filter((c) => c.project_id === pid)
     return { status: 200, data: dashboard(list) }
   }
   if (p === '/api/logs' && method === 'GET') {
@@ -406,18 +439,27 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
   }
   if (p === '/api/contracts' && method === 'POST') {
     const c = sanitizeContract(body, { id: db.uid('ct'), created_at: db.now(), updated_at: db.now(), archived: 0 })
+    // V1.1 补充协议：继承主合同信息时自动生成 {主编号}-n（全局唯一，冲突跳号）
+    if (!c.contract_no && c.parent_id) {
+      const parent = db.one('SELECT contract_no FROM contract WHERE id=?', [c.parent_id])
+      if (parent) {
+        let n = 1
+        while (db.one('SELECT id FROM contract WHERE contract_no=?', [`${parent.contract_no}-${n}`])) n++
+        c.contract_no = `${parent.contract_no}-${n}`
+      }
+    }
     if (!c.contract_no) c.contract_no = db.nextCode(c.direction)
     const err = validateContract(c)
     if (err) throw new ApiError(400, err)
     const pt = db.one('SELECT blacklist FROM party WHERE id=?', [c.party_id])
     if (pt && pt.blacklist && body.confirmBlacklist !== true) throw new ApiError(400, '该相对方在黑名单中，请显式确认后创建（confirmBlacklist=true）')
     db.mutate(() => {
-      db.run(`INSERT INTO contract (id,contract_no,title,direction,type,status,project_id,party_id,parent_id,our_entity,amount,currency,sign_date,start_date,end_date,auto_renew,terminate_note,owner,archived,remark,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      db.run(`INSERT INTO contract (id,contract_no,title,direction,type,status,project_id,party_id,parent_id,our_entity,amount,currency,sign_date,start_date,end_date,auto_renew,terminate_note,owner,archived,remark,created_at,updated_at,amount_ex_tax,tax_amount,tax_rate,category_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [c.id, c.contract_no, c.title, c.direction, c.type, c.status, c.project_id, c.party_id, c.parent_id,
           c.our_entity, c.amount, c.currency, c.sign_date, c.start_date, c.end_date, c.auto_renew, c.terminate_note,
-          c.owner, 0, c.remark, c.created_at, c.updated_at])
-      db.addLog({ contract_id: c.id, contract_no: c.contract_no, event_type: '创建', content: `新增合同【${c.contract_no}】${c.title}`, operator: body.operator || c.owner || '商务', source: ctx.source || 'desktop' })
+          c.owner, 0, c.remark, c.created_at, c.updated_at, c.amount_ex_tax, c.tax_amount, c.tax_rate, c.category_id])
+      db.addLog({ contract_id: c.id, contract_no: c.contract_no, event_type: '创建', content: `新增合同【${c.contract_no}】${c.title}${c.parent_id ? '（补充协议）' : ''}`, operator: body.operator || c.owner || '商务', source: ctx.source || 'desktop' })
     })
     return { status: 200, data: contractView(findContract(c.id)) }
   }
@@ -436,10 +478,10 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
       const err = validateContract(next, id)
       if (err) throw new ApiError(400, err)
       db.mutate(() => {
-        db.run(`UPDATE contract SET contract_no=?,title=?,direction=?,type=?,status=?,project_id=?,party_id=?,parent_id=?,our_entity=?,amount=?,currency=?,sign_date=?,start_date=?,end_date=?,auto_renew=?,terminate_note=?,owner=?,remark=?,updated_at=? WHERE id=?`,
+        db.run(`UPDATE contract SET contract_no=?,title=?,direction=?,type=?,status=?,project_id=?,party_id=?,parent_id=?,our_entity=?,amount=?,currency=?,sign_date=?,start_date=?,end_date=?,auto_renew=?,terminate_note=?,owner=?,remark=?,updated_at=?,amount_ex_tax=?,tax_amount=?,tax_rate=?,category_id=? WHERE id=?`,
           [next.contract_no, next.title, next.direction, next.type, next.status, next.project_id, next.party_id, next.parent_id,
             next.our_entity, next.amount, next.currency, next.sign_date, next.start_date, next.end_date, next.auto_renew,
-            next.terminate_note, next.owner, next.remark, next.updated_at, id])
+            next.terminate_note, next.owner, next.remark, next.updated_at, next.amount_ex_tax, next.tax_amount, next.tax_rate, next.category_id, id])
         diffContractLogs(old, next, body.operator || next.owner || '商务', ctx.source || 'desktop')
       })
       return { status: 200, data: contractView(findContract(id)) }
@@ -507,7 +549,8 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
       const m = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl)
       if (!m) throw new ApiError(400, '文件内容须为 base64 DataURL')
       const buf = Buffer.from(m[2], 'base64')
-      if (buf.length > 50 * 1024 * 1024) throw new ApiError(413, '单文件不能超过 50MB')
+      const maxMB = Number(db.getSettings().maxFileSizeMB) || 200
+      if (buf.length > maxMB * 1024 * 1024) throw new ApiError(413, `单文件不能超过 ${maxMB}MB（可在设置中调整，上限 300MB）`)
       const isMain = body.isMain ? 1 : 0
       const version = Number(body.version) || (db.one('SELECT MAX(version) AS v FROM contract_file WHERE contract_id=?', [cid]).v || 0) + 1
       const safe = name.replace(/[^A-Za-z0-9_\-\u4e00-\u9fa5.]/g, '_')
@@ -542,6 +585,26 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
         before_value: `v${f.version}`, content: `删除文件【${f.file_name}】v${f.version}`, operator: body.operator || '商务', source: ctx.source || 'desktop' })
     })
     return { status: 200, data: { id: f.id } }
+  }
+  // P0 修复：解析文件路径（桌面端 IPC 预览/下载用），带存在性校验与权限校验
+  if (p === '/api/files/resolve' && method === 'POST') {
+    const f = db.one('SELECT * FROM contract_file WHERE id=?', [body.fileId])
+    if (!f) throw new ApiError(404, '文件记录不存在')
+    // 权限：pm 仅本项目
+    if (role === 'pm') {
+      const owned = db.all('SELECT id FROM project WHERE owner=?', [currentUser?.owner_name || '']).map((x) => x.id)
+      const c = db.one('SELECT project_id FROM contract WHERE id=?', [f.contract_id])
+      if (!c || !owned.includes(c.project_id)) throw new ApiError(403, '无权访问该项目的文件')
+    }
+    const abs = db.mediaFilePath(f.file_path)
+    if (!abs) throw new ApiError(400, '文件路径不合法')
+    const exists = fs.existsSync(abs)
+    const contract = db.one('SELECT contract_no FROM contract WHERE id=?', [f.contract_id]) || {}
+    return { status: 200, data: {
+      fileId: f.id, fileName: f.file_name, filePath: f.file_path, absPath: abs,
+      size: f.size, version: f.version, exists, contractNo: contract.contract_no || '',
+      ext: path.extname(f.file_name).toLowerCase(),
+    } }
   }
   // 下载事件留痕
   if (p === '/api/files/view-log' && method === 'POST') {
@@ -596,16 +659,69 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     }
   }
 
+  // ---------- V1.1 期次模板生成 ----------
+  if (p === '/api/payment-plans/generate' && method === 'POST') {
+    const c = findContract(body.contractId)
+    const template = String(body.template || 'once')
+    const direction = body.direction || '应收'
+    const total = Number(body.total ?? c.amount) || 0
+    if (!['应收', '应付'].includes(direction)) throw new ApiError(400, '方向须为 应收/应付')
+    const existing = db.all('SELECT id FROM payment_plan WHERE contract_id=?', [c.id])
+    if (existing.length && body.confirm !== 'overwrite' && body.confirm !== 'append')
+      throw new ApiError(400, '该合同已有收付款计划，请确认覆盖或追加（confirm=overwrite/append）')
+    // 生成 {seq, ratio, date}
+    const plans = []
+    const addMonths = (dateStr, months) => {
+      const d = new Date(dateStr + 'T00:00:00'); if (isNaN(d)) return ''
+      d.setMonth(d.getMonth() + months)
+      const p2 = (n) => String(n).padStart(2, '0')
+      return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+    }
+    if (template === 'once') {
+      plans.push({ seq: '一次性', ratio: 1, date: c.end_date || '' })
+    } else if (template === 'down-tail') {
+      const first = Number(body.firstRatio ?? 30) / 100
+      plans.push({ seq: '首付', ratio: first, date: c.start_date || addMonths(c.sign_date, 0) })
+      plans.push({ seq: '尾款', ratio: 1 - first, date: c.end_date || '' })
+    } else if (template === 'quarterly') {
+      const start = c.start_date || c.sign_date
+      const end = c.end_date
+      if (!start || !end) throw new ApiError(400, '按季度生成需要合同填写开始日与结束日')
+      const months = []
+      for (let d = new Date(start + 'T00:00:00'); d <= new Date(end + 'T00:00:00'); d.setMonth(d.getMonth() + 3)) {
+        const p2 = (n) => String(n).padStart(2, '0')
+        months.push(`${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(Math.min(d.getDate(), new Date(end + 'T00:00:00').getDate()))}`)
+      }
+      if (!months.length) months.push(addMonths(start, 3))
+      months.forEach((dt, i) => plans.push({ seq: `第${i + 1}期`, ratio: Math.round((1 / months.length) * 100) / 100, date: dt }))
+    } else if (template === 'custom') {
+      const specs = Array.isArray(body.items) ? body.items : []
+      if (!specs.length) throw new ApiError(400, '自定义模板请提供期次明细 items')
+      for (const it of specs) plans.push({ seq: String(it.seq || ''), ratio: Number(it.ratio) || 0, date: String(it.date || '') })
+    } else throw new ApiError(400, '模板须为 once / down-tail / quarterly / custom')
+    db.mutate(() => {
+      if (body.confirm === 'overwrite') db.run('DELETE FROM payment_plan WHERE contract_id=?', [c.id])
+      for (const pl of plans) {
+        db.run(`INSERT INTO payment_plan (id,contract_id,direction,seq,plan_amount,plan_date,status,remark,created_at,nature) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          [db.uid('pp'), c.id, direction, pl.seq, Math.round(total * pl.ratio * 100) / 100, pl.date || '', '未收付', `模板：${template}`, db.now(), body.nature || 'contract'])
+      }
+      db.addLog({ contract_id: c.id, contract_no: c.contract_no, event_type: '收付款计划',
+        content: `按模板【${template}】生成 ${plans.length} 期收付款计划${body.confirm === 'overwrite' ? '（覆盖）' : ''}`, operator: currentUser?.name || '', source: ctx.source || 'desktop' })
+    })
+    return { status: 200, data: { generated: plans.length, template } }
+  }
+
   // ---------- 收付款计划 ----------
   if (p === '/api/payment-plans' && method === 'POST') {
     const cid = body.contractId
     findContract(cid)
     const pp = { id: db.uid('pp'), contract_id: cid, direction: body.direction || '应收', seq: body.seq || '',
       plan_amount: Number(body.plan_amount) || 0, plan_date: body.plan_date || '', status: body.status || '未收付',
-      remark: body.remark || '', created_at: db.now() }
+      remark: body.remark || '', created_at: db.now(), nature: body.nature || 'contract' }
     if (!['应收', '应付'].includes(pp.direction)) throw new ApiError(400, '方向须为 应收/应付')
-    db.run(`INSERT INTO payment_plan (id,contract_id,direction,seq,plan_amount,plan_date,status,remark,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [pp.id, pp.contract_id, pp.direction, pp.seq, pp.plan_amount, pp.plan_date, pp.status, pp.remark, pp.created_at])
+    if (!db.PAY_NATURES.includes(pp.nature)) throw new ApiError(400, '收付款性质不合法')
+    db.run(`INSERT INTO payment_plan (id,contract_id,direction,seq,plan_amount,plan_date,status,remark,created_at,nature) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [pp.id, pp.contract_id, pp.direction, pp.seq, pp.plan_amount, pp.plan_date, pp.status, pp.remark, pp.created_at, pp.nature])
     db.persist()
     return { status: 200, data: pp }
   }
@@ -635,13 +751,14 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     const c = findContract(cid)
     const pr = { id: db.uid('pr'), contract_id: cid, plan_id: body.plan_id || '', amount: Number(body.amount) || 0,
       pay_date: String(body.pay_date || '').trim(), method: body.method || '银行转账', voucher_path: body.voucher_path || '',
-      remark: body.remark || '', created_at: db.now() }
+      remark: body.remark || '', created_at: db.now(), nature: body.nature || 'contract' }
     if (!pr.pay_date || !/^\d{4}-\d{2}-\d{2}$/.test(pr.pay_date)) throw new ApiError(400, '到账日期格式应为 YYYY-MM-DD')
     if (!(pr.amount > 0)) throw new ApiError(400, '金额须大于 0')
+    if (!db.PAY_NATURES.includes(pr.nature)) throw new ApiError(400, '收付款性质不合法')
     if (role === 'pm' && !READONLY_ALLOWED.includes(p)) throw new ApiError(403, '项目经理不可登记收付款')
     db.mutate(() => {
-      db.run(`INSERT INTO payment_record (id,contract_id,plan_id,amount,pay_date,method,voucher_path,remark,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-        [pr.id, pr.contract_id, pr.plan_id, pr.amount, pr.pay_date, pr.method, pr.voucher_path, pr.remark, pr.created_at])
+      db.run(`INSERT INTO payment_record (id,contract_id,plan_id,amount,pay_date,method,voucher_path,remark,created_at,nature) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [pr.id, pr.contract_id, pr.plan_id, pr.amount, pr.pay_date, pr.method, pr.voucher_path, pr.remark, pr.created_at, pr.nature])
       if (pr.plan_id) {
         const plan = db.one('SELECT * FROM payment_plan WHERE id=?', [pr.plan_id])
         if (plan) {
@@ -674,6 +791,104 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     })
     return { status: 200, data: { id: pr.id } }
   }
+  // ---------- V1.1 发票登记 ----------
+  // 合同维度发票汇总
+  if (/^\/api\/contracts\/([^/]+)\/invoices\/summary$/.test(p) && method === 'GET') {
+    const cid = /^\/api\/contracts\/([^/]+)\/invoices\/summary$/.exec(p)[1]
+    findContract(cid)
+    const rows = db.all("SELECT direction, amount_incl_tax FROM invoice WHERE contract_id=? AND status!='作废'", [cid])
+    const issued = rows.filter((x) => x.direction === '开票').reduce((s, x) => s + Number(x.amount_incl_tax || 0), 0)
+    const received = rows.filter((x) => x.direction === '收票').reduce((s, x) => s + Number(x.amount_incl_tax || 0), 0)
+    return { status: 200, data: { issued, received, count: rows.length } }
+  }
+  if (p === '/api/invoices' && method === 'GET') {
+    // 全局列表，可按 contractId / direction / status 筛选，pm 限本项目
+    let list = db.all('SELECT i.*, c.contract_no, c.title AS contract_title FROM invoice i LEFT JOIN contract c ON c.id=i.contract_id ORDER BY i.invoice_date DESC, i.created_at DESC')
+    if (role === 'pm') {
+      const owned = db.all('SELECT id FROM project WHERE owner=?', [currentUser?.owner_name || '']).map((x) => x.id)
+      const cids = new Set(db.all('SELECT id, project_id FROM contract').filter((c) => owned.includes(c.project_id)).map((c) => c.id))
+      list = list.filter((i) => cids.has(i.contract_id))
+    }
+    if (query.get('contractId')) list = list.filter((i) => i.contract_id === query.get('contractId'))
+    if (query.get('direction')) list = list.filter((i) => i.direction === query.get('direction'))
+    if (query.get('status')) list = list.filter((i) => i.status === query.get('status'))
+    return { status: 200, data: { list } }
+  }
+  if (p === '/api/invoices' && method === 'POST') {
+    const cid = body.contractId
+    const c = findContract(cid)
+    if (role === 'pm') throw new ApiError(403, '项目经理不可维护发票')
+    const inv = {
+      id: db.uid('inv'), contract_id: cid,
+      direction: body.direction || (c.direction === '对外' ? '开票' : '收票'),
+      invoice_type: body.invoice_type || '普票', invoice_no: String(body.invoice_no || '').trim(),
+      invoice_code: String(body.invoice_code || '').trim(), invoice_date: String(body.invoice_date || '').trim(),
+      amount_ex_tax: Number(body.amount_ex_tax) || 0, tax_amount: Number(body.tax_amount) || 0,
+      amount_incl_tax: Number(body.amount_incl_tax) || 0, tax_rate: Number(body.tax_rate) || 0,
+      seller_name: String(body.seller_name || '').trim(), buyer_name: String(body.buyer_name || '').trim(),
+      status: body.status || '草稿', remark: String(body.remark || '').trim(),
+      created_by: currentUser?.name || '', created_at: db.now(), updated_at: db.now(),
+    }
+    if (!db.INVOICE_DIRECTIONS.includes(inv.direction)) throw new ApiError(400, '票种方向须为 开票/收票')
+    if (!db.INVOICE_TYPES.includes(inv.invoice_type)) throw new ApiError(400, '发票类型不合法')
+    if (!inv.invoice_no) throw new ApiError(400, '发票号码不能为空')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(inv.invoice_date)) throw new ApiError(400, '开票日期格式应为 YYYY-MM-DD')
+    if (!(inv.amount_incl_tax >= 0)) throw new ApiError(400, '价税合计不能为负')
+    if (!db.INVOICE_STATUS.includes(inv.status)) throw new ApiError(400, '发票状态不合法')
+    // 自动算税额：填了价税合计与不含税金额时
+    if (inv.amount_ex_tax && inv.amount_incl_tax) inv.tax_amount = Math.round((inv.amount_incl_tax - inv.amount_ex_tax) * 100) / 100
+    const dup = db.one('SELECT id FROM invoice WHERE invoice_no=?', [inv.invoice_no])
+    if (dup && db.getSettings().invoiceNoDuplicateForbid) throw new ApiError(400, `发票号码【${inv.invoice_no}】已存在`)
+    db.mutate(() => {
+      db.run(`INSERT INTO invoice (id,contract_id,direction,invoice_type,invoice_no,invoice_code,invoice_date,amount_ex_tax,tax_amount,amount_incl_tax,tax_rate,seller_name,buyer_name,status,remark,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [inv.id, inv.contract_id, inv.direction, inv.invoice_type, inv.invoice_no, inv.invoice_code, inv.invoice_date,
+          inv.amount_ex_tax, inv.tax_amount, inv.amount_incl_tax, inv.tax_rate, inv.seller_name, inv.buyer_name,
+          inv.status, inv.remark, inv.created_by, inv.created_at, inv.updated_at])
+      db.addLog({ contract_id: cid, contract_no: c.contract_no, event_type: '发票登记',
+        content: `登记${inv.direction}【${inv.invoice_no}】价税合计 ¥${inv.amount_incl_tax}`, operator: inv.created_by, source: ctx.source || 'desktop' })
+    })
+    return { status: 200, data: inv }
+  }
+  const invMatch = /^\/api\/invoices\/([^/]+)$/.exec(p)
+  if (invMatch) {
+    const inv = db.one('SELECT * FROM invoice WHERE id=?', [invMatch[1]])
+    if (!inv) throw new ApiError(404, '发票不存在')
+    if (role === 'pm') throw new ApiError(403, '项目经理不可维护发票')
+    if (method === 'PUT') {
+      const next = { ...inv }
+      for (const k of ['direction','invoice_type','invoice_no','invoice_code','invoice_date','seller_name','buyer_name','status','remark'])
+        if (k in body) next[k] = String(body[k] ?? '').trim()
+      for (const k of ['amount_ex_tax','tax_amount','amount_incl_tax','tax_rate'])
+        if (k in body) next[k] = Number(body[k]) || 0
+      if (!db.INVOICE_DIRECTIONS.includes(next.direction)) throw new ApiError(400, '票种方向不合法')
+      if (!db.INVOICE_TYPES.includes(next.invoice_type)) throw new ApiError(400, '发票类型不合法')
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(next.invoice_date)) throw new ApiError(400, '开票日期格式应为 YYYY-MM-DD')
+      if (!db.INVOICE_STATUS.includes(next.status)) throw new ApiError(400, '发票状态不合法')
+      if (inv.status !== '作废' && next.status === '作废' && !String(body.voidReason || '').trim())
+        throw new ApiError(400, '发票作废必须填写原因')
+      if (inv.status !== '作废' && next.status === '作废')
+        next.remark = `${next.remark} [作废原因：${String(body.voidReason).trim()}]`.trim()
+      if (next.amount_ex_tax && next.amount_incl_tax) next.tax_amount = Math.round((next.amount_incl_tax - next.amount_ex_tax) * 100) / 100
+      db.mutate(() => {
+        db.run(`UPDATE invoice SET direction=?,invoice_type=?,invoice_no=?,invoice_code=?,invoice_date=?,amount_ex_tax=?,tax_amount=?,amount_incl_tax=?,tax_rate=?,seller_name=?,buyer_name=?,status=?,remark=?,updated_at=? WHERE id=?`,
+          [next.direction, next.invoice_type, next.invoice_no, next.invoice_code, next.invoice_date, next.amount_ex_tax,
+            next.tax_amount, next.amount_incl_tax, next.tax_rate, next.seller_name, next.buyer_name, next.status, next.remark, db.now(), inv.id])
+        db.addLog({ contract_id: inv.contract_id, event_type: '发票变更', target: inv.invoice_no,
+          content: `发票【${inv.invoice_no}】更新${inv.status !== '作废' && next.status === '作废' ? '（作废）' : ''}`, operator: currentUser?.name || '', source: ctx.source || 'desktop' })
+      })
+      return { status: 200, data: next }
+    }
+    if (method === 'DELETE') {
+      db.mutate(() => {
+        db.run('DELETE FROM invoice_payment_link WHERE invoice_id=?', [inv.id])
+        db.run('DELETE FROM invoice WHERE id=?', [inv.id])
+        db.addLog({ contract_id: inv.contract_id, event_type: '发票变更', content: `删除发票【${inv.invoice_no}】`, operator: currentUser?.name || '', source: ctx.source || 'desktop' })
+      })
+      return { status: 200, data: { id: inv.id } }
+    }
+  }
+
   // H5 简易登记（只读白名单）
   if (p === '/api/h5/register-payment' && method === 'POST') {
     body.contractId = body.contractId || body.contract_id
@@ -737,6 +952,26 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     if (!d) throw new ApiError(404, '类型不存在')
     if (db.one('SELECT COUNT(*) AS n FROM contract WHERE type=?', [d.name]).n > 0) throw new ApiError(400, `类型【${d.name}】已被合同引用，不可删除`)
     db.run('DELETE FROM dict_type WHERE id=?', [d.id]); db.persist()
+    return { status: 200, data: { id: d.id } }
+  }
+  // V1.1 费用/业务分类字典
+  if (p === '/api/dict-categories' && method === 'GET')
+    return { status: 200, data: { list: db.all('SELECT * FROM dict_category ORDER BY sort_order, rowid') } }
+  if (p === '/api/dict-categories' && method === 'POST') {
+    const name = String(body.name || '').trim()
+    if (!name) throw new ApiError(400, '分类名称不能为空')
+    if (db.one('SELECT id FROM dict_category WHERE name=?', [name])) throw new ApiError(400, `分类【${name}】已存在`)
+    const d = { id: db.uid('cat'), name, sort_order: Number(body.sort_order) || 0 }
+    db.run('INSERT INTO dict_category (id,name,sort_order) VALUES (?,?,?)', [d.id, d.name, d.sort_order])
+    db.persist()
+    return { status: 200, data: d }
+  }
+  const catDel = /^\/api\/dict-categories\/([^/]+)$/.exec(p)
+  if (catDel && method === 'DELETE') {
+    const d = db.one('SELECT * FROM dict_category WHERE id=?', [catDel[1]])
+    if (!d) throw new ApiError(404, '分类不存在')
+    if (db.one('SELECT COUNT(*) AS n FROM contract WHERE category_id=?', [d.id]).n > 0) throw new ApiError(400, `分类【${d.name}】已被合同引用，不可删除`)
+    db.run('DELETE FROM dict_category WHERE id=?', [d.id]); db.persist()
     return { status: 200, data: { id: d.id } }
   }
   if (p === '/api/settings' && method === 'PUT') {

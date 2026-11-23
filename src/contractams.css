@@ -2,9 +2,10 @@
 
 /* ---------- KPI 摘要条 ---------- */
 .kpi-strip {
-  display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px;
-  padding: 10px 16px 6px; flex: none;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px;
+  padding: 10px 16px 4px; flex: none;
 }
+.kpi-note { padding: 0 16px 6px; color: var(--muted); font-size: 11px; flex: none; }
 .kpi {
   background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius);
   padding: 8px 12px; display: flex; flex-direction: column; gap: 3px; min-width: 0;
@@ -35,6 +36,13 @@
 .mini-btn.danger:hover { color: var(--red); border-color: var(--red); }
 .icon-btn { width: 26px; height: 26px; border: 0; background: transparent; color: var(--muted); font-size: 16px; border-radius: 4px; }
 .icon-btn:hover { color: var(--text-strong); background: rgba(255,255,255,.06); }
+/* 右上角刷新按钮 */
+.refresh-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; cursor: pointer; }
+.refresh-btn:hover { color: var(--cyan); background: rgba(0, 200, 255, .1); }
+.refresh-btn:disabled { opacity: .55; cursor: default; }
+.refresh-icon { width: 15px; height: 15px; display: block; }
+.refresh-btn.spinning .refresh-icon { animation: refreshSpin .8s linear infinite; }
+@keyframes refreshSpin { to { transform: rotate(360deg); } }
 .link-btn { border: 0; background: transparent; color: var(--cyan); font-size: 12px; padding: 2px 4px; cursor: pointer; }
 .link-btn:hover { text-decoration: underline; }
 .muted { color: var(--muted); }
@@ -220,6 +228,19 @@
 .login-quick-grid button:hover { border-color: var(--cyan); background: rgba(63,211,255,.08); }
 .login-quick-grid button b { color: var(--text-strong); font-size: 12.5px; }
 .login-quick-grid button span { color: var(--muted); font-size: 11px; }
+
+/* ---------- V1.1 台账按项目分组 ---------- */
+.proj-group { border: 1px solid var(--line-soft); border-radius: var(--radius); margin-bottom: 8px; overflow: hidden; }
+.proj-group-head {
+  display: flex; align-items: center; gap: 16px; padding: 10px 12px; cursor: pointer;
+  background: var(--panel); color: var(--text); font-size: 12px; flex-wrap: wrap;
+}
+.proj-group-head:hover { background: var(--panel-2); }
+.proj-group-head b { color: var(--text-strong); font-size: 13px; }
+.proj-group-toggle { color: var(--cyan); font-size: 12px; width: 12px; }
+.proj-group-head .amber { color: var(--amber); }
+.proj-group-body { padding: 6px; border-top: 1px solid var(--line-soft); }
+.board-filter-note { margin: 0 16px 8px; color: var(--cyan); font-size: 12px; }
 
 /* ---------- 顶部当前账号 ---------- */
 .current-account { display: inline-flex; align-items: center; gap: 7px; color: var(--text); font-size: 12px; }

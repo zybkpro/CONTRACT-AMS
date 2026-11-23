@@ -1,9 +1,9 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { api, setSession, clearSession, getCurrentUser } from './api'
 import {
   LIST_COLUMNS, STATUSES, DIRECTIONS, ROLE_LABEL, STATUS_META, exportContractsToExcel,
-  exportLogsToExcel, exportPaymentsToExcel, toast, daysUntil, formatMoney,
+  exportLogsToExcel, exportPaymentsToExcel, toast, daysUntil, formatMoney, downloadTemplate,
 } from './utils'
 import LoginDialog from './components/LoginDialog.vue'
 import UserPanel from './components/UserPanel.vue'
@@ -16,18 +16,29 @@ import EntityPanel from './components/EntityPanel.vue'
 import ChartsPanel from './components/ChartsPanel.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import ImportDialog from './components/ImportDialog.vue'
+import InvoicePanel from './components/InvoicePanel.vue'
 
 const contracts = ref([]), projects = ref([]), parties = ref([])
-const dictTypes = ref([]), settings = ref({}), dashboard = ref(null)
+const dictTypes = ref([]), dictCategories = ref([]), settings = ref({}), dashboard = ref(null)
 const view = ref('ledger') // ledger | board | project | party | user
 const keyword = ref(''), direction = ref('全部'), status = ref('全部'), projectFilter = ref('全部')
 const showArchived = ref(false)
+// V1.1：台账按项目分组 + 展开偏好（看板筛选直接复用 projectFilter，实现联动）
+const groupByProject = ref(false)
+const expandedGroups = ref(loadExpanded())
+function loadExpanded() { try { return JSON.parse(localStorage.getItem('contractams-expanded-groups') || '[]') } catch (_) { return [] } }
+function toggleGroup(pid) {
+  const i = expandedGroups.value.indexOf(pid)
+  if (i >= 0) expandedGroups.value.splice(i, 1); else expandedGroups.value.push(pid)
+  try { localStorage.setItem('contractams-expanded-groups', JSON.stringify(expandedGroups.value)) } catch (_) {}
+}
 const selectedId = ref('')
 const dialog = ref(null)
 const detail = ref(null)
 const clock = ref('')
 const currentUser = ref(getCurrentUser())
 const loginReady = ref(false)
+const refreshing = ref(false)   // 右上角刷新按钮的加载态
 let timer = null
 
 // 角色/归属由登录账号决定（不可用视角下拉切换）
@@ -54,18 +65,58 @@ const filtered = computed(() => {
     return [c.contract_no, c.title, c.type, c.owner, c.remark].some((v) => String(v ?? '').toLowerCase().includes(kw))
   })
 })
+// V1.1 台账按项目分组（先筛后组）
+const groupedContracts = computed(() => {
+  const map = new Map()
+  for (const c of filtered.value) {
+    const key = c.project_id || '__none__'
+    if (!map.has(key)) map.set(key, {
+      id: key, name: c.project_name || '未归属项目', rows: [],
+      count: 0, amountOut: 0, amountIn: 0, remainIn: 0, remainOut: 0,
+    })
+    const g = map.get(key)
+    g.rows.push(c); g.count++
+    if (c.direction === '对外') g.amountOut += Number(c.amount || 0)
+    else g.amountIn += Number(c.amount || 0)
+    g.remainIn += Number(c.summary?.remainIn || 0)
+    g.remainOut += Number(c.summary?.remainOut || 0)
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count)
+})
 const selected = computed(() => contracts.value.find((c) => c.id === selectedId.value) || null)
+
+async function loadDashboard() {
+  try { dashboard.value = await api.dashboard(projectFilter.value === '全部' ? '' : projectFilter.value) }
+  catch (e) { toast(`看板加载失败：${e.message}`, 'error') }
+}
+// 项目筛选联动看板（P0-2）
+watch(projectFilter, () => loadDashboard())
 
 async function load() {
   try {
-    const [d, dash] = await Promise.all([api.bootstrap(), api.dashboard()])
+    const [d, dash, cats] = await Promise.all([
+      api.bootstrap(),
+      api.dashboard(projectFilter.value === '全部' ? '' : projectFilter.value),
+      api.dictCategories(),
+    ])
     contracts.value = d.contracts; projects.value = d.projects; parties.value = d.parties
-    dictTypes.value = d.dictTypes; settings.value = d.settings; dashboard.value = dash
+    dictTypes.value = d.dictTypes; dictCategories.value = cats.list || []
+    settings.value = d.settings; dashboard.value = dash
     if (detail.value) {
       const fresh = d.contracts.find((c) => c.id === detail.value.id)
       if (fresh) detail.value = await api.getContract(fresh.id)
     }
   } catch (e) { toast(`数据加载失败：${e.message}`, 'error') }
+}
+/** 右上角刷新：重新拉取台账/看板/字典/设置，并给出反馈 */
+async function refreshData() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await load()
+    toast('数据已刷新', 'success')
+  } catch (e) { toast(`刷新失败：${e.message}`, 'error') }
+  finally { refreshing.value = false }
 }
 function tick() { clock.value = new Date().toLocaleString('zh-CN', { hour12: false }) }
 
@@ -103,16 +154,41 @@ function openDetail(row) {
   if (!c) return toast('请先选中一行合同', 'warn')
   api.getContract(c.id).then((fresh) => { detail.value = fresh }).catch((e) => toast(e.message, 'error'))
 }
-function openNew(prefill = {}) { dialog.value = { name: 'contract', payload: { model: null, prefill } } }
+function openNew(prefill = {}) {
+  // 预填（如从项目卡片建合同）：构造无 id 的 model，ContractDialog 会展开为新增表单
+  const model = Object.keys(prefill).length
+    ? { contract_no: '', title: '', direction: '对外', type: '销售', status: '草稿', project_id: '', party_id: '',
+        parent_id: '', our_entity: '', amount: 0, currency: 'CNY', sign_date: '', start_date: '', end_date: '',
+        auto_renew: false, terminate_note: '', owner: '', remark: '', ...prefill }
+    : null
+  dialog.value = { name: 'contract', payload: { model } }
+}
 function openEdit(contract) {
   const c = contract || selected.value
   if (!c) return toast('请先选中一行合同', 'warn')
   dialog.value = { name: 'contract', payload: { model: c } }
 }
+/** V1.1 补充协议：从主合同继承字段，编号留空由后端按 {主编号}-n 生成 */
+function openSupplement(contract) {
+  const c = contract || selected.value
+  if (!c) return toast('请先选中一份主合同', 'warn')
+  if (c.parent_id) return toast('补充协议下不能再创建补充协议', 'warn')
+  detail.value = null
+  dialog.value = { name: 'contract', payload: { model: {
+    contract_no: '', title: `${c.title}-补充协议`, direction: c.direction, type: c.type,
+    status: '草稿', project_id: c.project_id || '', party_id: c.party_id, parent_id: c.id,
+    our_entity: c.our_entity || '', amount: 0, currency: c.currency || 'CNY',
+    sign_date: '', start_date: '', end_date: '', auto_renew: false, terminate_note: '',
+    owner: c.owner || '', remark: '',
+  } } }
+}
 function newContractFor(entity) {
   const isProject = view.value === 'project'
   openNew(isProject ? { project_id: entity.id } : { party_id: entity.id })
 }
+// V1.1 项目卡片快捷入口：按项目下钻台账 / 看板
+function viewInLedger(project) { projectFilter.value = project.id; view.value = 'ledger' }
+function viewInBoard(project) { projectFilter.value = project.id; view.value = 'board' }
 async function saved() { dialog.value = null; detail.value = null; await load() }
 function resetFilter() { keyword.value = ''; direction.value = '全部'; status.value = '全部'; projectFilter.value = '全部'; showArchived.value = false }
 
@@ -156,7 +232,7 @@ async function confirmDelete() {
 
 function doExport() {
   if (!filtered.value.length) return toast('当前视图无可导出数据', 'warn')
-  exportContractsToExcel(filtered.value, settings.value.exportColumns, `合同台账_${new Date().toISOString().slice(0,10)}.xlsx`)
+  exportContractsToExcel(filtered.value, settings.value.exportColumns, `合同台账_${new Date().toISOString().slice(0,10)}.xlsx`, { mask: settings.value.exportMask, labels: settings.value.fieldLabels || {} })
   toast(`已导出 ${filtered.value.length} 条合同`, 'success')
 }
 async function doExportLogs() {
@@ -184,28 +260,37 @@ function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dial
           <h1>合同管理系统</h1>
         </div>
         <div class="top-status">
+          <span class="online"><span class="dot"></span>本机数据已连接</span>
+          <span class="clock">{{ clock }}</span>
           <span class="current-account" :title="`${currentUser?.name}（${ROLE_LABEL[currentUser?.role] || currentUser?.role}）`">
             <span class="avatar">{{ (currentUser?.name || '?').slice(0, 1) }}</span>
             <b>{{ currentUser?.name }}</b>
             <span class="tag-cell tag-cyan">{{ ROLE_LABEL[currentUser?.role] || currentUser?.role }}</span>
           </span>
+          <button class="icon-btn refresh-btn" :class="{ spinning: refreshing }" :disabled="refreshing" @click="refreshData" title="刷新数据" aria-label="刷新数据">
+            <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+          </button>
           <button class="btn ghost btn-sm" @click="onLogout" title="退出登录">退出</button>
-          <span class="online"><span class="dot"></span>本机数据已连接</span>
-          <span class="clock">{{ clock }}</span>
         </div>
       </header>
 
       <!-- 摘要 KPI -->
       <section class="kpi-strip">
         <div class="kpi"><label>合同总数</label><b>{{ dashboard?.total || 0 }}</b></div>
-        <div class="kpi"><label>在签金额</label><b class="cyan">¥{{ formatMoney(dashboard?.totalAmount || 0, 0) }}</b></div>
+        <div class="kpi" title="方向=对外，状态=已签署/履约中"><label>在签收入</label><b class="cyan">¥{{ formatMoney(dashboard?.inSignIncome || 0, 0) }}</b></div>
+        <div class="kpi" title="方向=对内，状态=已签署/履约中"><label>在签支出</label><b class="red">¥{{ formatMoney(dashboard?.inSignExpense || 0, 0) }}</b></div>
+        <div class="kpi" v-if="settings.showNetAmount" title="在签收入 − 在签支出"><label>在签净额</label><b class="cyan">¥{{ formatMoney(dashboard?.inSignNet || 0, 0) }}</b></div>
         <div class="kpi"><label>履约中</label><b class="green">{{ dashboard?.inProgress || 0 }}</b></div>
         <div class="kpi"><label>本月到期</label><b class="amber">{{ dashboard?.soonCount || 0 }}</b></div>
         <div class="kpi"><label>已过期未处理</label><b class="red">{{ dashboard?.overdueCount || 0 }}</b></div>
         <div class="kpi"><label>应收未收</label><b class="amber">¥{{ formatMoney(dashboard?.finance?.remainIn || 0, 0) }}</b></div>
-        <div class="kpi"><label>应付未付</label><b class="amber">¥{{ formatMoney(dashboard?.finance?.remainOut || 0, 0) }}</b></div>
         <div class="kpi"><label>回款率</label><b class="green">{{ dashboard?.finance?.receiveRate || 0 }}%</b></div>
       </section>
+      <div class="kpi-note">金额口径：{{ settings.amountBasis || '含税' }} · 在签收入/支出按「对外/对内 且 已签署/履约中」统计</div>
 
       <!-- 工具栏 -->
       <div class="toolbar">
@@ -214,14 +299,17 @@ function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dial
           <button :class="{ active: view === 'board' }" @click="switchView('board')">看板</button>
           <button :class="{ active: view === 'project' }" @click="switchView('project')">项目</button>
           <button :class="{ active: view === 'party' }" @click="switchView('party')">相对方</button>
+          <button :class="{ active: view === 'invoice' }" @click="switchView('invoice')">发票</button>
           <button v-if="isAdmin && multiRoleMode" :class="{ active: view === 'user' }" @click="switchView('user')">人员</button>
         </div>
         <span class="divider"></span>
         <template v-if="view === 'ledger'">
           <button v-if="canEdit" class="btn btn-primary" @click="openNew()">＋ 新增合同</button>
           <button v-if="canEdit" class="btn" @click="openEdit()">编辑</button>
+          <button v-if="canEdit" class="btn" @click="selected && openSupplement(selected)">补充协议</button>
           <button v-if="role === 'admin'" class="btn btn-danger" @click="selected && requestDelete(selected)">删除</button>
           <button v-if="canEdit" class="btn" @click="dialog = { name: 'import' }">导入</button>
+          <button class="btn" @click="downloadTemplate">下载模板</button>
           <button class="btn" @click="doExport">导出</button>
           <button class="btn" @click="doExportPayments">收付款导出</button>
           <button class="btn" @click="doExportLogs">日志导出</button>
@@ -229,6 +317,7 @@ function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dial
           <label class="field-inline">方向<select v-model="direction"><option>全部</option><option v-for="d in DIRECTIONS" :key="d">{{ d }}</option></select></label>
           <label class="field-inline">状态<select v-model="status"><option>全部</option><option v-for="s in STATUSES" :key="s">{{ s }}</option></select></label>
           <label class="field-inline">项目<select v-model="projectFilter"><option value="全部">全部</option><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
+          <label class="field-inline checkbox"><input v-model="groupByProject" type="checkbox" /> 按项目分组</label>
           <label class="field-inline checkbox"><input v-model="showArchived" type="checkbox" /> 含归档</label>
           <span class="spacer"></span>
           <input v-model="keyword" class="search-input" type="text" placeholder="编号 / 名称 / 相对方 / 负责人…" @keyup.enter="() => {}" />
@@ -246,12 +335,33 @@ function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dial
         <!-- 台账视图 -->
         <div v-if="view === 'ledger'" class="ledger-view">
           <div class="table-summary">共 {{ filtered.length }} 份合同 · 合计金额 ¥{{ formatMoney(filtered.reduce((s,c)=>s+Number(c.amount||0),0), 0) }}</div>
-          <ContractTable :rows="filtered" :columns="columns" :selected-id="selectedId" :role="role" :mask="mask"
-            :remind-days="remindDays" @select="onSelect" @action="onTableAction" />
+          <!-- V1.1 按项目分组二级台账 -->
+          <template v-if="groupByProject">
+            <div v-for="g in groupedContracts" :key="g.id" class="proj-group">
+              <div class="proj-group-head" @click="toggleGroup(g.id)">
+                <span class="proj-group-toggle">{{ expandedGroups.includes(g.id) ? '▾' : '▸' }}</span>
+                <b>{{ g.name }}</b>
+                <span>{{ g.count }} 份</span>
+                <span>对外 ¥{{ formatMoney(g.amountOut, 0) }}</span>
+                <span>对内 ¥{{ formatMoney(g.amountIn, 0) }}</span>
+                <span class="amber">应收未收 ¥{{ formatMoney(g.remainIn, 0) }}</span>
+                <span class="amber">应付未付 ¥{{ formatMoney(g.remainOut, 0) }}</span>
+              </div>
+              <div v-if="expandedGroups.includes(g.id)" class="proj-group-body">
+                <ContractTable :rows="g.rows" :columns="columns" :selected-id="selectedId" :role="role" :mask="mask"
+                  :remind-days="remindDays" :field-labels="settings.fieldLabels || {}" @select="onSelect" @action="onTableAction" />
+              </div>
+            </div>
+            <div v-if="!groupedContracts.length" class="empty-row">无合同数据</div>
+          </template>
+          <ContractTable v-else :rows="filtered" :columns="columns" :selected-id="selectedId" :role="role" :mask="mask"
+            :remind-days="remindDays" :field-labels="settings.fieldLabels || {}" @select="onSelect" @action="onTableAction" />
         </div>
 
         <!-- 看板视图 -->
         <div v-else-if="view === 'board'" class="board-view">
+          <div v-if="projectFilter !== '全部'" class="board-filter-note">当前看板按项目「{{ projects.find(p => p.id === projectFilter)?.name || '未归属项目' }}」统计 · <a href="javascript:;" @click="projectFilter = '全部'">查看全部</a></div>
+          <div v-if="dashboard?.penalties" class="board-filter-note">违约金/罚息等其它收支合计：¥{{ formatMoney(dashboard.penalties, 0) }}（不计入回款率）</div>
           <ChartsPanel :dashboard="dashboard" />
           <div class="board-lists">
             <div class="board-card">
@@ -273,7 +383,11 @@ function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dial
 
         <!-- 项目 / 相对方视图 -->
         <EntityPanel v-else-if="view === 'project' || view === 'party'" :mode="view" :projects="projects" :parties="parties" :contracts="contracts"
-          :mask="mask" :can-edit="canEdit" @refresh="load" @new-contract="newContractFor" />
+          :mask="mask" :can-edit="canEdit" @refresh="load" @new-contract="newContractFor"
+          @view-in-ledger="viewInLedger" @view-in-board="viewInBoard" />
+
+        <!-- 发票列表（V1.1） -->
+        <InvoicePanel v-else-if="view === 'invoice'" mode="global" :contracts="contracts" :can-edit="canEdit" />
 
         <!-- 人员管理视图（仅管理员） -->
         <UserPanel v-else-if="view === 'user'" :current-user="currentUser" />
@@ -281,13 +395,15 @@ function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dial
     </template>
 
     <!-- 详情抽屉 -->
-    <ContractDetail v-if="detail" :contract="detail" :role="role" :mask="mask" :remind-days="remindDays"
+    <ContractDetail v-if="detail" :contract="detail" :contracts="contracts" :role="role" :mask="mask" :remind-days="remindDays"
+      :max-file-m-b="settings.maxFileSizeMB || 200"
       @close="detail = null" @refresh="(f) => detail = f" @edit="(c) => { detail = null; openEdit(c) }"
-      @status="(p) => requestStatus(p.row, p.status)" />
+      @supplement="(c) => openSupplement(c)" @status="(p) => requestStatus(p.row, p.status)" />
 
     <!-- 弹窗 -->
     <ContractDialog v-if="dialog?.name === 'contract'" :model="dialog.payload.model"
-      :projects="projects" :parties="parties" :contracts="contracts" :dict-types="dictTypes" @saved="saved" @close="dialog = null" />
+      :projects="projects" :parties="parties" :contracts="contracts" :dict-types="dictTypes"
+      :dict-categories="dictCategories" @saved="saved" @close="dialog = null" />
     <SettingsDialog v-if="dialog?.name === 'settings'" :settings="settings" :initial-tab="dialog.payload?.tab || 'dict'"
       @saved="onSettingsSaved" @close="dialog = null" />
     <ImportDialog v-if="dialog?.name === 'import'" @imported="load" @close="dialog = null" />

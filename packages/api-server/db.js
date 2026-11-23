@@ -32,6 +32,16 @@ const DEFAULT_SETTINGS = {
   exportColumns: ['contract_no', 'title', 'direction', 'type', 'status', 'project_name', 'party_name', 'our_entity', 'amount', 'currency', 'sign_date', 'start_date', 'end_date', 'owner'],
   roles: { admin: '管理员', biz: '商务', pm: '项目经理', finance: '财务' },
   onlyAdminLogin: true,     // 当前仅开放超级管理员登录（临时简化，可关闭恢复多角色）
+  // V1.1 新增设置
+  appVersion: '1.1.0',
+  showNetAmount: false,        // 看板是否显示「在签净额」
+  amountEntryBasis: '含税',    // 录入口径：含税 / 不含税
+  defaultTaxRate: 0,           // 默认税率（%）
+  maxFileSizeMB: 200,          // 附件单文件上限（MB）
+  invoiceNoDuplicateForbid: false, // 发票号码重复是否禁止
+  autoBackup: { enabled: false, cycle: 'daily', time: '02:00', keep: 7, dir: '' },
+  fieldLabels: {},             // 字段显示名覆盖（轻量配置）
+  paymentTemplates: {},        // 自定义期次模板
 }
 const DEFAULT_CONFIG = { port: 8788, token: '', h5ReadOnly: false, autoStart: false, https: false }
 
@@ -39,6 +49,13 @@ const STATUS = ['草稿', '审批中', '已驳回', '已签署', '履约中', '�
 const DIRECTION = ['对内', '对外']
 const ROLES = ['admin', 'biz', 'pm', 'finance']
 const ROLE_LABEL = { admin: '管理员', biz: '商务', pm: '项目经理', finance: '财务' }
+// V1.1 枚举
+const INVOICE_DIRECTIONS = ['开票', '收票']
+const INVOICE_TYPES = ['专票', '普票', '电子票', '其他']
+const INVOICE_STATUS = ['草稿', '已开具', '已认证', '作废']
+const PAY_NATURES = ['contract', 'penalty', 'interest', 'occupation', 'other']
+const PAY_NATURE_LABEL = { contract: '合同款', penalty: '违约金', interest: '迟延履行利息/罚息', occupation: '资金占用利息', other: '其他' }
+const CATEGORIES = ['材料', '设备', '工资/劳务', '服务', '其他']
 
 /** 密码散列（MVP 用带盐 SHA-256；生产应换 bcrypt/argon2） */
 function hashPassword(pwd, salt = 'contractams') {
@@ -63,6 +80,7 @@ async function init() {
   db = fs.existsSync(DB_FILE) ? new SQL.Database(fs.readFileSync(DB_FILE)) : new SQL.Database()
   db.run('PRAGMA foreign_keys = ON')
   createTables()
+  migrate()
   const isNew = !fs.existsSync(DB_FILE)
   if (isNew || one('SELECT COUNT(*) AS n FROM contract').n === 0) seed()
   ensureDefaultUsers()
@@ -94,7 +112,8 @@ function createTables() {
       our_entity TEXT DEFAULT '', amount REAL DEFAULT 0, currency TEXT DEFAULT 'CNY',
       sign_date TEXT DEFAULT '', start_date TEXT DEFAULT '', end_date TEXT DEFAULT '',
       auto_renew INTEGER DEFAULT 0, terminate_note TEXT DEFAULT '', owner TEXT DEFAULT '',
-      archived INTEGER DEFAULT 0, remark TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      archived INTEGER DEFAULT 0, remark TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      amount_ex_tax REAL DEFAULT 0, tax_amount REAL DEFAULT 0, tax_rate REAL DEFAULT 0, category_id TEXT DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_contract_no ON contract(contract_no);
     CREATE INDEX IF NOT EXISTS idx_contract_project ON contract(project_id);
@@ -119,14 +138,16 @@ function createTables() {
     CREATE TABLE IF NOT EXISTS payment_plan (
       id TEXT PRIMARY KEY, contract_id TEXT NOT NULL, direction TEXT NOT NULL,
       seq TEXT DEFAULT '', plan_amount REAL DEFAULT 0, plan_date TEXT DEFAULT '',
-      status TEXT DEFAULT '未收付', remark TEXT DEFAULT '', created_at TEXT NOT NULL
+      status TEXT DEFAULT '未收付', remark TEXT DEFAULT '', created_at TEXT NOT NULL,
+      nature TEXT DEFAULT 'contract'
     );
     CREATE INDEX IF NOT EXISTS idx_pplan_contract ON payment_plan(contract_id);
 
     CREATE TABLE IF NOT EXISTS payment_record (
       id TEXT PRIMARY KEY, contract_id TEXT NOT NULL, plan_id TEXT DEFAULT '',
       amount REAL DEFAULT 0, pay_date TEXT NOT NULL, method TEXT DEFAULT '银行转账',
-      voucher_path TEXT DEFAULT '', remark TEXT DEFAULT '', created_at TEXT NOT NULL
+      voucher_path TEXT DEFAULT '', remark TEXT DEFAULT '', created_at TEXT NOT NULL,
+      nature TEXT DEFAULT 'contract'
     );
     CREATE INDEX IF NOT EXISTS idx_prec_contract ON payment_record(contract_id);
     CREATE INDEX IF NOT EXISTS idx_prec_plan ON payment_record(plan_id);
@@ -161,8 +182,60 @@ function createTables() {
       token TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, last_active TEXT NOT NULL
     );
 
+    -- V1.1 费用/业务分类字典
+    CREATE TABLE IF NOT EXISTS dict_category (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, sort_order INTEGER DEFAULT 0
+    );
+    -- V1.1 发票登记
+    CREATE TABLE IF NOT EXISTS invoice (
+      id TEXT PRIMARY KEY, contract_id TEXT NOT NULL, direction TEXT NOT NULL,
+      invoice_type TEXT NOT NULL, invoice_no TEXT NOT NULL, invoice_code TEXT DEFAULT '',
+      invoice_date TEXT NOT NULL, amount_ex_tax REAL DEFAULT 0, tax_amount REAL DEFAULT 0,
+      amount_incl_tax REAL DEFAULT 0, tax_rate REAL DEFAULT 0,
+      seller_name TEXT DEFAULT '', buyer_name TEXT DEFAULT '',
+      status TEXT DEFAULT '草稿', remark TEXT DEFAULT '',
+      created_by TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_invoice_contract ON invoice(contract_id);
+    CREATE INDEX IF NOT EXISTS idx_invoice_no ON invoice(invoice_no);
+    CREATE TABLE IF NOT EXISTS invoice_file (
+      id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL, file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_invfile_invoice ON invoice_file(invoice_id);
+    CREATE TABLE IF NOT EXISTS invoice_payment_link (
+      invoice_id TEXT NOT NULL, payment_record_id TEXT NOT NULL,
+      PRIMARY KEY (invoice_id, payment_record_id)
+    );
+
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
   `)
+}
+
+/**
+ * V1.1 幂等迁移：老库用 ALTER TABLE 补齐新增列（sql.js 不支持 ADD COLUMN IF NOT EXISTS）
+ * 同时初始化分类字典与 app_version。
+ */
+function migrate() {
+  const addColumn = (table, col, ddl) => {
+    const cols = all(`PRAGMA table_info(${table})`).map((c) => c.name)
+    if (!cols.includes(col)) db.run(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`)
+  }
+  addColumn('contract', 'amount_ex_tax', 'REAL DEFAULT 0')
+  addColumn('contract', 'tax_amount', 'REAL DEFAULT 0')
+  addColumn('contract', 'tax_rate', 'REAL DEFAULT 0')
+  addColumn('contract', 'category_id', "TEXT DEFAULT ''")
+  addColumn('payment_plan', 'nature', "TEXT DEFAULT 'contract'")
+  addColumn('payment_record', 'nature', "TEXT DEFAULT 'contract'")
+  // 老库已有的合同：nature 已在 ALTER 时默认 contract；金额字段默认 0 即可（旧 amount 视为价税合计）
+  db.run("UPDATE payment_plan SET nature='contract' WHERE nature IS NULL OR nature=''")
+  db.run("UPDATE payment_record SET nature='contract' WHERE nature IS NULL OR nature=''")
+  // 分类字典默认项
+  for (let i = 0; i < CATEGORIES.length; i++) {
+    if (!one('SELECT id FROM dict_category WHERE name=?', [CATEGORIES[i]]))
+      run('INSERT INTO dict_category (id,name,sort_order) VALUES (?,?,?)', [uid('cat'), CATEGORIES[i], i])
+  }
+  if (!one("SELECT value FROM settings WHERE key='app_version'")) setSetting('app_version', '1.1.0')
 }
 
 /** 确保四个默认账号存在（新库/老库升级都调用；重复调用安全） */
@@ -331,10 +404,16 @@ function contractFileDir(code) {
   const safe = String(code || 'unknown').replace(/[^A-Za-z0-9_\-\u4e00-\u9fa5]/g, '_')
   return path.join(MEDIA_DIR, safe)
 }
+/** /media/ URL → 绝对路径（含目录穿越防护）；无效返回 null */
+function mediaFilePath(url) {
+  if (!url || !String(url).startsWith('/media/')) return null
+  const target = path.resolve(MEDIA_DIR, decodeURIComponent(String(url).slice('/media/'.length).split('?')[0]))
+  if (!target.startsWith(path.resolve(MEDIA_DIR) + path.sep)) return null
+  return target
+}
 function removeMediaFile(url) {
-  if (!url || !url.startsWith('/media/')) return
-  const target = path.resolve(MEDIA_DIR, decodeURIComponent(url.slice('/media/'.length).split('?')[0]))
-  if (!target.startsWith(path.resolve(MEDIA_DIR) + path.sep)) return
+  const target = mediaFilePath(url)
+  if (!target) return
   try { fs.unlinkSync(target) } catch (_) {}
 }
 
@@ -366,8 +445,9 @@ function lanIPs() {
 
 module.exports = {
   ROOT, DATA_DIR, DB_FILE, MEDIA_DIR, CONFIG_FILE, DEFAULT_SETTINGS, STATUS, DIRECTION, ROLES, ROLE_LABEL,
+  INVOICE_DIRECTIONS, INVOICE_TYPES, INVOICE_STATUS, PAY_NATURES, PAY_NATURE_LABEL, CATEGORIES,
   init, now, uid, run, all, one, persist, mutate, bootstrap, addLog,
-  nextCode, codeExists, contractFileDir, removeMediaFile, mask, visible,
+  nextCode, codeExists, contractFileDir, mediaFilePath, removeMediaFile, mask, visible,
   getSettings, setSetting, getConfig, saveConfig, lanIPs,
-  hashPassword, ensureDefaultUsers,
+  hashPassword, ensureDefaultUsers, migrate,
 }

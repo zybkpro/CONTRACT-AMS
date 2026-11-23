@@ -9,6 +9,7 @@ const props = defineProps({
   role: { type: String, default: 'admin' },
   mask: { type: Boolean, default: true },
   remindDays: { type: Array, default: () => [30, 15, 7] },
+  fieldLabels: { type: Object, default: () => ({}) },
 })
 const emit = defineEmits(['select', 'action', 'sort'])
 
@@ -43,7 +44,7 @@ function dueInfo(row) {
         <tr>
           <th class="col-actions">操作</th>
           <th v-for="c in columns" :key="c.key" :style="{ width: c.width + 'px', textAlign: c.align || 'left' }">
-            {{ c.label }}
+            {{ fieldLabels[c.key] || c.label }}
           </th>
           <th class="col-due">到期</th>
           <th class="col-life">日志</th>
