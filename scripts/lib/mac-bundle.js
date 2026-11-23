@@ -47,6 +47,8 @@ function collectAppFiles(root, version) {
     'packages/api-server/db.js', 'packages/api-server/core.js', 'packages/api-server/http.js',
     // V1.3.1 激活码功能：http.js 依赖 ./license，必须一并打包否则服务启动崩溃
     'packages/api-server/license.js',
+    // V1.1 备份：main.js 启动时 require('./backup')，backup 又依赖 scripts/lib/zip
+    'packages/api-server/backup.js', 'scripts/lib/zip.js',
     // V1.3 可选 HTTPS 自签证书：H5 摄像头扫码需要安全上下文
     'packages/api-server/cert/server.key', 'packages/api-server/cert/server.crt',
     'server/seed.json',

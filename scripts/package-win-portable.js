@@ -52,6 +52,8 @@ function appEntries() {
     'apps/desktop/main.js', 'apps/desktop/preload.js',
     'packages/api-server/db.js', 'packages/api-server/core.js', 'packages/api-server/http.js',
     'packages/api-server/license.js',
+    // V1.1 备份：main.js 启动时 require('./backup')，backup 又依赖 scripts/lib/zip
+    'packages/api-server/backup.js', 'scripts/lib/zip.js',
     'server/seed.json',
   ]) add(f, fs.readFileSync(path.join(ROOT, f)))
   const walk = (abs, rel) => {
