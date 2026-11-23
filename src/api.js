@@ -130,7 +130,7 @@ export const api = {
   addDictCategory: (data) => request('/api/dict-categories', body('POST', data)),
   deleteDictCategory: (id) => request(`/api/dict-categories/${id}`, body('DELETE')),
   saveSettings: (settings) => request('/api/settings', body('PUT', settings)),
-  runBackup: (dir) => request('/api/backup/run', body('POST', { dir })),
+  runBackup: (dir, withData = false) => request('/api/backup/run', body('POST', { dir, withData })),
   clearData: () => request('/api/data/clear', body('POST', { confirm: 'CLEAR' })),
   importContracts: (rows) => request('/api/import', body('POST', { rows })),
 

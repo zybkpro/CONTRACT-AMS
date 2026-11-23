@@ -30,7 +30,14 @@ async function doImport() {
   busy.value = true
   try {
     result.value = await api.importContracts(parsed.value)
-    if (result.value.created) { toast(`成功导入 ${result.value.created} 条`, 'success'); emit('imported') }
+    if (result.value.created) {
+      const extra = [
+        result.value.autoParties?.length ? `，自动建相对方 ${result.value.autoParties.length} 个` : '',
+        result.value.autoProjects?.length ? `，自动建项目 ${result.value.autoProjects.length} 个` : '',
+      ].join('')
+      toast(`成功导入 ${result.value.created} 条${extra}`, 'success')
+      emit('imported')
+    }
   } catch (e) { toast(e.message, 'error') } finally { busy.value = false }
 }
 </script>

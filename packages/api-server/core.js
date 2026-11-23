@@ -324,6 +324,8 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     const backup = require('./backup')
     const r = backup.createBackup(String(body.dir || '').trim())
     db.addLog({ event_type: '手动备份', content: `手动备份：${path.basename(r.file)}（${(r.size / 1048576).toFixed(1)}MB）`, operator: currentUser?.name || '', source: ctx.source || 'desktop' })
+    // 浏览器端需要文件内容下载；桌面端只用 file 路径走 IPC 另存
+    if (body.withData) r.base64 = fs.readFileSync(r.file).toString('base64')
     return { status: 200, data: r }
   }
   if (p === '/api/next-code' && method === 'GET')
@@ -992,6 +994,10 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
   if (p === '/api/import' && method === 'POST') {
     const rows = Array.isArray(body.rows) ? body.rows : []
     const created = [], failed = [], seen = new Set()
+    const autoParties = new Set(), autoProjects = new Set()
+    // 导入时按名称自动补齐相对方/项目档案：让「导出→清空→导入」可自恢复；
+    // body.autoCreateArchive === false 可关闭（严格模式：缺失档案则报错）
+    const autoCreate = body.autoCreateArchive !== false
     db.mutate(() => {
       rows.forEach((raw, i) => {
         const rowNo = raw.__rowNo || i + 1
@@ -1000,14 +1006,34 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
         // 按名称关联相对方 / 项目（这些字段不在 contract 表中，需从原始行读取）
         const rawParty = String(raw.party_name || raw['相对方'] || '').trim()
         const rawProject = String(raw.project_name || raw['项目'] || '').trim()
-        const pt = rawParty ? db.one('SELECT id FROM party WHERE name=?', [rawParty]) : null
+        let pt = rawParty ? db.one('SELECT id FROM party WHERE name=?', [rawParty]) : null
+        if (!pt && rawParty && autoCreate) {
+          const at = db.now()
+          const np = { id: db.uid('pt'), name: rawParty, role: c.direction === '对内' ? '供应商' : '客户',
+            credit_code: '', contact: '', phone: '', email: '', bank: '', account: '', rating: '', blacklist: 0,
+            remark: '导入时自动创建', created_at: at, updated_at: at }
+          db.run(`INSERT INTO party (id,name,role,credit_code,contact,phone,email,bank,account,rating,blacklist,remark,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [np.id, np.name, np.role, '', '', '', '', '', '', '', 0, np.remark, at, at])
+          pt = db.one('SELECT id FROM party WHERE name=?', [rawParty])
+          autoParties.add(rawParty)
+        }
         if (pt && !c.party_id) c.party_id = pt.id
         let err = validateContract(c)
         if (!err && !pt && rawParty) err = `相对方【${rawParty}】不存在，请先在相对方档案创建`
         if (!err && seen.has(c.contract_no.toUpperCase())) err = `合同编号【${c.contract_no}】在本批次中重复`
         if (err) { failed.push({ row: rowNo, code: c.contract_no, reason: err }); return }
         seen.add(c.contract_no.toUpperCase())
-        const prj = rawProject ? db.one('SELECT id FROM project WHERE name=?', [rawProject]) : null
+        let prj = rawProject ? db.one('SELECT id FROM project WHERE name=?', [rawProject]) : null
+        if (!prj && rawProject && autoCreate) {
+          const at = db.now()
+          const code = `P${new Date().getFullYear()}${String(db.one('SELECT COUNT(*) AS n FROM project').n + 1).padStart(3, '0')}`
+          const np = { id: db.uid('prj'), code, name: rawProject, owner: c.owner || '', status: '履约中',
+            start_date: c.start_date || '', end_date: c.end_date || '', remark: '导入时自动创建', created_at: at, updated_at: at }
+          db.run(`INSERT INTO project (id,code,name,owner,status,start_date,end_date,remark,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)`, [np.id, np.code, np.name, np.owner, np.status, np.start_date, np.end_date, np.remark, at, at])
+          prj = db.one('SELECT id FROM project WHERE name=?', [rawProject])
+          autoProjects.add(rawProject)
+        }
         if (prj && !c.project_id) c.project_id = prj.id
         db.run(`INSERT INTO contract (id,contract_no,title,direction,type,status,project_id,party_id,parent_id,our_entity,amount,currency,sign_date,start_date,end_date,auto_renew,terminate_note,owner,archived,remark,created_at,updated_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -1017,9 +1043,9 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
         db.addLog({ contract_id: c.id, contract_no: c.contract_no, event_type: '创建', content: `导入合同【${c.contract_no}】${c.title}`, operator: body.operator || '商务', source: 'import' })
         created.push(c)
       })
-      if (created.length) db.addLog({ event_type: '批量导入', content: `批量导入合同：成功 ${created.length} 条，失败 ${failed.length} 条`, operator: body.operator || '商务', source: 'import' })
+      if (created.length) db.addLog({ event_type: '批量导入', content: `批量导入合同：成功 ${created.length} 条，失败 ${failed.length} 条${autoParties.size ? `，自动建相对方 ${autoParties.size} 个` : ''}${autoProjects.size ? `，自动建项目 ${autoProjects.size} 个` : ''}`, operator: body.operator || '商务', source: 'import' })
     })
-    return { status: 200, data: { created: created.length, failed, total: rows.length } }
+    return { status: 200, data: { created: created.length, failed, total: rows.length, autoParties: [...autoParties], autoProjects: [...autoProjects] } }
   }
 
   throw new ApiError(404, `未知接口：${method} ${p}`)

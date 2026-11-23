@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, watch } from 'vue'
-import { api } from '../api'
+import { api, isDesktop } from '../api'
 import { toast } from '../utils'
 import ChangePassword from './ChangePassword.vue'
 
@@ -67,8 +67,25 @@ async function delCat(id) {
 async function manualBackup() {
   busy.value = true
   try {
-    const r = await api.runBackup(cfg.autoBackup?.dir || '')
-    toast(`备份完成：${(r.size / 1048576).toFixed(1)}MB，${r.mediaCount} 个附件`, 'success')
+    // 桌面端：生成 zip 后弹系统「另存为」，真正导出到用户指定位置
+    if (isDesktop && window.contractams?.file?.save) {
+      const r = await api.runBackup(cfg.autoBackup?.dir || '')
+      const name = r.file.split(/[\\/]/).pop()
+      const saved = await window.contractams.file.save(r.file, name)
+      if (saved?.canceled) { toast('已取消，备份文件仍保存在数据目录', 'info'); return }
+      toast(`已导出：${saved.savedPath}`, 'success')
+      return
+    }
+    // 浏览器端：取回文件内容触发下载
+    const r = await api.runBackup(cfg.autoBackup?.dir || '', true)
+    const bytes = Uint8Array.from(atob(r.base64), (c) => c.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = r.file.split(/[\\/]/).pop()
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+    toast(`已导出：${a.download}`, 'success')
   } catch (e) { toast(e.message, 'error') } finally { busy.value = false }
 }
 function openClearDialog() {
@@ -181,7 +198,7 @@ function toggleRemind(d) {
             </div>
             <label class="field"><span>备份目录（留空=数据目录/backups）</span><input v-model="cfg.autoBackup.dir" placeholder="如 D:/备份/合同系统" /></label>
             <p class="hint">备份 zip 含数据库、配置与全部附件。异地备份：把该目录同步到网盘即可；自动备份需保持程序在运行。</p>
-            <button class="btn sm" :disabled="busy" @click="manualBackup">{{ busy ? '备份中…' : '立即备份一次' }}</button>
+            <button class="btn sm" :disabled="busy" @click="manualBackup">{{ busy ? '备份中…' : '备份' }}</button>
           </div>
           <div v-else-if="tab === 'security'" class="setting-section">
             <h4>敏感字段脱敏</h4>
@@ -204,7 +221,7 @@ function toggleRemind(d) {
           <div v-else-if="tab === 'data'" class="setting-section">
             <h4>数据管理</h4>
             <p class="hint">备份会导出数据库与全部附件为 zip；清空仅删除业务数据，保留账号与系统设置，且不可恢复。</p>
-            <button class="btn sm" :disabled="busy" @click="manualBackup">{{ busy ? '备份中…' : '立即备份一次' }}</button>
+            <button class="btn sm" :disabled="busy" @click="manualBackup">{{ busy ? '备份中…' : '备份' }}</button>
             <div class="danger-zone">
               <div><b>清空本地业务数据</b><span>删除全部合同、项目、相对方、发票、收付款、日志、附件文件</span></div>
               <button class="btn danger sm" @click="openClearDialog">清空数据</button>

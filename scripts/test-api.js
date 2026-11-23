@@ -206,12 +206,30 @@ function call(method, p, body = {}, query = {}) {
 
   // 24. 清空数据：确认短语校验 / 仅清业务数据 / 账号与设置保留（放最后，因会清库）
   assert.throws(() => call('POST', '/api/data/clear', { confirm: 'wrong' }), /确认短语不正确/)
+  // 先导出若干行，供清空后导入自恢复测试
+  const exportRows = call('GET', '/api/contracts', {}, {}).list.filter((c) => c.party_name).slice(0, 3).map((c) => ({
+    contract_no: c.contract_no, title: c.title, direction: c.direction, type: c.type, status: c.status,
+    party_name: c.party_name, project_name: c.project_name, amount: c.amount,
+  }))
   const cleared = call('POST', '/api/data/clear', { confirm: 'CLEAR' })
   assert.ok(cleared.counts.contract >= 0)
   assert.strictEqual(call('GET', '/api/bootstrap', {}, {}).contracts.length, 0)
   assert.ok(db.one('SELECT COUNT(*) AS n FROM app_user').n >= 4)
   assert.ok(Object.keys(db.getSettings()).length > 0)
   console.log('✓ 清空数据：短语校验 + 仅清业务数据 + 账号设置保留')
+
+  // 25. 清空后导入：相对方/项目档案自动重建，导出→清空→导入可自恢复
+  const imported = call('POST', '/api/import', { rows: exportRows })
+  assert.strictEqual(imported.failed.length, 0)
+  assert.strictEqual(imported.created, exportRows.length)
+  assert.ok(imported.autoParties.length > 0)
+  assert.ok(db.one('SELECT COUNT(*) AS n FROM contract').n === exportRows.length)
+  // 严格模式：关闭自动建档案后，缺失相对方应报错
+  call('POST', '/api/data/clear', { confirm: 'CLEAR' })
+  const strict = call('POST', '/api/import', { rows: exportRows, autoCreateArchive: false })
+  assert.strictEqual(strict.created, 0)
+  assert.ok(strict.failed.length > 0)
+  console.log('✓ 清空后导入自恢复：自动建相对方/项目，严格模式可关闭')
 
   console.log('\n✅ 全部冒烟测试通过')
 })().catch((e) => { console.error('❌ 测试失败:', e.message); console.error(e.stack); process.exit(1) })

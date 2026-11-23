@@ -9,6 +9,7 @@ data/license.json
 data/machine_id
 data/media/*
 !data/media/.gitkeep
+data/backups/
 *.log
 .DS_Store
 .workbuddy/
