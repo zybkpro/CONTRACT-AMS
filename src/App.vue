@@ -245,6 +245,15 @@ function doExportPayments() {
 }
 function switchView(v) { view.value = v }
 function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dialog.value = null; load() }
+/** 清空业务数据后：关弹窗、清选中、回台账并重新加载 */
+async function onDataCleared() {
+  dialog.value = null
+  detail.value = null
+  selectedId.value = ''
+  projectFilter.value = '全部'
+  view.value = 'ledger'
+  await load()
+}
 </script>
 
 <template>
@@ -405,7 +414,7 @@ function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dial
       :projects="projects" :parties="parties" :contracts="contracts" :dict-types="dictTypes"
       :dict-categories="dictCategories" @saved="saved" @close="dialog = null" />
     <SettingsDialog v-if="dialog?.name === 'settings'" :settings="settings" :initial-tab="dialog.payload?.tab || 'dict'"
-      @saved="onSettingsSaved" @close="dialog = null" />
+      :role="role" @saved="onSettingsSaved" @cleared="onDataCleared" @close="dialog = null" />
     <ImportDialog v-if="dialog?.name === 'import'" @imported="load" @close="dialog = null" />
     <ConfirmDialog v-if="dialog?.name === 'delete'" title="删除合同" danger
       :message="`确定永久删除【${dialog.payload.row.contract_no}】${dialog.payload.row.title}？关联文件与流水将一并删除，不可恢复。`"

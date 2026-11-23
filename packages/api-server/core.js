@@ -978,6 +978,15 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     db.mutate(() => { for (const [k, v] of Object.entries(body)) db.setSetting(k, v) })
     return { status: 200, data: db.getSettings() }
   }
+  // 危险操作：清空全部业务数据（保留账号/设置/分类字典），需 admin + 确认短语
+  if (p === '/api/data/clear' && method === 'POST') {
+    if (role !== 'admin') throw new ApiError(403, '仅超级管理员可清空数据')
+    if (String(body.confirm || '').toUpperCase() !== 'CLEAR')
+      throw new ApiError(400, '确认短语不正确，操作已取消')
+    const r = db.clearBusinessData()
+    db.addLog({ event_type: '清空数据', content: `清空全部业务数据：${r.filesRemoved} 个附件目录/文件，合同 ${r.counts.contract || 0} 份`, operator: currentUser?.name || '', source: ctx.source || 'desktop' })
+    return { status: 200, data: { ok: true, ...r } }
+  }
 
   // ---------- 导入 / 导出 ----------
   if (p === '/api/import' && method === 'POST') {

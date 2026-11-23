@@ -229,6 +229,16 @@
 .login-quick-grid button b { color: var(--text-strong); font-size: 12.5px; }
 .login-quick-grid button span { color: var(--muted); font-size: 11px; }
 
+/* ---------- 设置：数据管理危险区 ---------- */
+.danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin-top: 18px; padding: 12px 14px; border: 1px solid rgba(255,107,107,.35); border-radius: var(--radius); background: rgba(255,107,107,.06); }
+.danger-zone div { display: flex; flex-direction: column; gap: 4px; }
+.danger-zone b { color: var(--red); font-size: 13px; }
+.danger-zone span { color: var(--muted); font-size: 12px; }
+.clear-warning { padding: 10px 12px; margin-bottom: 12px; border-radius: 6px;
+  background: rgba(255,107,107,.1); color: var(--red); font-size: 12px; line-height: 1.7; }
+.clear-warning p { margin: 0 0 4px; }
+
 /* ---------- V1.1 台账按项目分组 ---------- */
 .proj-group { border: 1px solid var(--line-soft); border-radius: var(--radius); margin-bottom: 8px; overflow: hidden; }
 .proj-group-head {

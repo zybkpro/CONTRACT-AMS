@@ -4,10 +4,19 @@ import { api } from '../api'
 import { toast } from '../utils'
 import ChangePassword from './ChangePassword.vue'
 
-const props = defineProps({ settings: { type: Object, default: () => ({}) }, initialTab: { type: String, default: 'dict' } })
-const emit = defineEmits(['close', 'saved'])
+const props = defineProps({
+  settings: { type: Object, default: () => ({}) },
+  initialTab: { type: String, default: 'dict' },
+  role: { type: String, default: 'admin' },
+})
+const emit = defineEmits(['close', 'saved', 'cleared'])
 
 const tab = ref(props.initialTab)
+// 清空数据二次确认（危险操作：需勾选同意 + 输入"清空"）
+const clearDialog = ref(false)
+const clearAgree = ref(false)
+const clearPhrase = ref('')
+const clearing = ref(false)
 const dicts = ref([])
 const categories = ref([])
 const newDict = ref({ name: '', direction_scope: '全部' })
@@ -62,6 +71,22 @@ async function manualBackup() {
     toast(`备份完成：${(r.size / 1048576).toFixed(1)}MB，${r.mediaCount} 个附件`, 'success')
   } catch (e) { toast(e.message, 'error') } finally { busy.value = false }
 }
+function openClearDialog() {
+  clearAgree.value = false
+  clearPhrase.value = ''
+  clearDialog.value = true
+}
+async function doClear() {
+  if (!clearAgree.value) { toast('请先勾选确认', 'warn'); return }
+  if (clearPhrase.value.trim() !== '清空') { toast('请输入「清空」以确认', 'error'); return }
+  clearing.value = true
+  try {
+    const r = await api.clearData()
+    clearDialog.value = false
+    toast(`已清空：合同 ${r.counts?.contract || 0} 份、附件 ${r.filesRemoved} 项`, 'success')
+    emit('cleared')
+  } catch (e) { toast(e.message, 'error') } finally { clearing.value = false }
+}
 async function save() {
   busy.value = true
   try {
@@ -87,7 +112,8 @@ function toggleRemind(d) {
           <button v-for="t in [
             { k:'dict', l:'合同类型' }, { k:'category', l:'费用分类' }, { k:'code', l:'编号与金额' },
             { k:'approval', l:'审批阈值' }, { k:'remind', l:'提醒与归档' },
-            { k:'security', l:'脱敏设置' }, { k:'labels', l:'显示文案' }, { k:'password', l:'修改密码' }
+            { k:'security', l:'脱敏设置' }, { k:'labels', l:'显示文案' }, { k:'password', l:'修改密码' },
+            ...(role === 'admin' ? [{ k:'data', l:'数据管理' }] : [])
           ]" :key="t.k" :class="{ active: tab === t.k }" @click="tab = t.k">{{ t.l }}</button>
         </div>
         <div class="settings-content">
@@ -175,11 +201,41 @@ function toggleRemind(d) {
           <div v-else-if="tab === 'password'" class="setting-section">
             <ChangePassword />
           </div>
+          <div v-else-if="tab === 'data'" class="setting-section">
+            <h4>数据管理</h4>
+            <p class="hint">备份会导出数据库与全部附件为 zip；清空仅删除业务数据，保留账号与系统设置，且不可恢复。</p>
+            <button class="btn sm" :disabled="busy" @click="manualBackup">{{ busy ? '备份中…' : '立即备份一次' }}</button>
+            <div class="danger-zone">
+              <div><b>清空本地业务数据</b><span>删除全部合同、项目、相对方、发票、收付款、日志、附件文件</span></div>
+              <button class="btn danger sm" @click="openClearDialog">清空数据</button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="modal-foot">
         <button class="btn ghost" @click="emit('close')">关闭</button>
-        <button v-if="tab !== 'password'" class="btn primary" :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存设置' }}</button>
+        <button v-if="tab !== 'password' && tab !== 'data'" class="btn primary" :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存设置' }}</button>
+      </div>
+    </div>
+
+    <!-- 清空数据二次确认 -->
+    <div v-if="clearDialog" class="modal-mask" @click.self="clearDialog = false">
+      <div class="modal narrow">
+        <div class="modal-head"><h3>⚠ 清空本地业务数据</h3><button class="icon-btn" @click="clearDialog = false">✕</button></div>
+        <div class="modal-body">
+          <div class="clear-warning">
+            <p><b>此操作不可恢复！</b>将删除全部合同、项目、相对方、发票、收付款与附件文件。</p>
+            <p>账号与系统设置会保留。建议先做一次备份。</p>
+          </div>
+          <label class="checkbox-field"><input v-model="clearAgree" type="checkbox" /> 我已了解后果，并已备份（如需）</label>
+          <label class="field"><span>请输入「清空」以确认</span><input v-model="clearPhrase" placeholder="清空" /></label>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="clearDialog = false">取消</button>
+          <button class="btn danger" :disabled="clearing || !clearAgree || clearPhrase.trim() !== '清空'" @click="doClear">
+            {{ clearing ? '清空中…' : '确认清空' }}
+          </button>
+        </div>
       </div>
     </div>
   </div>

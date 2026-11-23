@@ -204,5 +204,14 @@ function call(method, p, body = {}, query = {}) {
   assert.strictEqual(call('POST', '/api/files/resolve', { fileId: file.id }).exists, false)
   console.log('✓ 附件解析：存在/缺失明确反馈（P0 修复）')
 
+  // 24. 清空数据：确认短语校验 / 仅清业务数据 / 账号与设置保留（放最后，因会清库）
+  assert.throws(() => call('POST', '/api/data/clear', { confirm: 'wrong' }), /确认短语不正确/)
+  const cleared = call('POST', '/api/data/clear', { confirm: 'CLEAR' })
+  assert.ok(cleared.counts.contract >= 0)
+  assert.strictEqual(call('GET', '/api/bootstrap', {}, {}).contracts.length, 0)
+  assert.ok(db.one('SELECT COUNT(*) AS n FROM app_user').n >= 4)
+  assert.ok(Object.keys(db.getSettings()).length > 0)
+  console.log('✓ 清空数据：短语校验 + 仅清业务数据 + 账号设置保留')
+
   console.log('\n✅ 全部冒烟测试通过')
 })().catch((e) => { console.error('❌ 测试失败:', e.message); console.error(e.stack); process.exit(1) })

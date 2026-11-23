@@ -417,6 +417,41 @@ function removeMediaFile(url) {
   try { fs.unlinkSync(target) } catch (_) {}
 }
 
+/**
+ * 清空业务数据：合同/项目/相对方/发票/收付款/日志/字典 + 全部附件文件。
+ * 保留：账号(app_user)、会话(user_session)、系统设置(settings)、内置分类(dict_category)。
+ * 调用方负责权限校验与二次确认；本函数只做数据清理并落盘。
+ */
+function clearBusinessData() {
+  const tables = [
+    'invoice_payment_link', 'invoice_file', 'invoice',
+    'approval_log', 'lifecycle_log', 'payment_record', 'payment_plan', 'milestone', 'contract_file',
+    'contract', 'party', 'project', 'dict_type',
+  ]
+  const counts = {}
+  mutate(() => {
+    for (const t of tables) {
+      try { counts[t] = one(`SELECT COUNT(*) AS n FROM ${t}`).n || 0 } catch (_) { counts[t] = 0 }
+      run(`DELETE FROM ${t}`)
+    }
+  })
+  // 附件：逐个合同目录删除，保留 MEDIA_DIR 本身
+  let filesRemoved = 0
+  try {
+    if (fs.existsSync(MEDIA_DIR)) {
+      for (const name of fs.readdirSync(MEDIA_DIR)) {
+        const p = path.join(MEDIA_DIR, name)
+        try {
+          if (fs.statSync(p).isDirectory()) fs.rmSync(p, { recursive: true, force: true })
+          else fs.unlinkSync(p)
+          filesRemoved++
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return { tables, counts, filesRemoved }
+}
+
 /** 敏感字段脱敏（后端兜底，前端也做展示层遮罩） */
 function mask(value, keep = null) {
   const s = String(value ?? '')
@@ -447,7 +482,7 @@ module.exports = {
   ROOT, DATA_DIR, DB_FILE, MEDIA_DIR, CONFIG_FILE, DEFAULT_SETTINGS, STATUS, DIRECTION, ROLES, ROLE_LABEL,
   INVOICE_DIRECTIONS, INVOICE_TYPES, INVOICE_STATUS, PAY_NATURES, PAY_NATURE_LABEL, CATEGORIES,
   init, now, uid, run, all, one, persist, mutate, bootstrap, addLog,
-  nextCode, codeExists, contractFileDir, mediaFilePath, removeMediaFile, mask, visible,
+  nextCode, codeExists, contractFileDir, mediaFilePath, removeMediaFile, clearBusinessData, mask, visible,
   getSettings, setSetting, getConfig, saveConfig, lanIPs,
   hashPassword, ensureDefaultUsers, migrate,
 }
