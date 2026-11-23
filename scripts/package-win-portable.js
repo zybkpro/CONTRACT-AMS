@@ -1,10 +1,12 @@
 'use strict'
 /**
  * 跨平台打包 Windows 绿色版（无需 NSIS / PowerShell，macOS/Linux 上即可产出）
- *  - 下载 Electron 官方 win32-x64 运行时，注入应用文件到 resources/app
+ *  - 下载 Electron 官方 win32 运行时（x64 / ia32），注入应用文件到 resources/app
  *  - 输出 ZIP，Windows 上解压后运行 CONTRACT-AMS.exe 即用
  * 注：NSIS .exe 安装包需 Windows + rcedit/NSIS，由 scripts/package-desktop.js 在 Windows 上生成。
- * 用法: node scripts/package-win-portable.js
+ * 用法: node scripts/package-win-portable.js [x64|ia32]
+ *   - 默认 x64，文件名：合同管理系统-Windows-<版本>-绿色版.zip
+ *   - ia32（32 位），文件名：合同管理系统-Windows32位-<版本>-绿色版.zip
  */
 const fs = require('fs')
 const path = require('path')
@@ -17,7 +19,9 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const ELECTRON_VERSION = '33.4.9'
 const RELEASE = path.join(ROOT, 'release')
 const WORK = path.join(ROOT, '.packaging', 'win')
-const ZIP_FILE = path.join(RELEASE, `合同管理系统-Windows-${VERSION}-绿色版.zip`)
+const ARCH = (process.argv[2] === 'ia32') ? 'ia32' : 'x64'
+const ARCH_LABEL = ARCH === 'ia32' ? 'Windows32位' : 'Windows'
+const ZIP_FILE = path.join(RELEASE, `合同管理系统-${ARCH_LABEL}-${VERSION}-绿色版.zip`)
 const MIRROR = `https://cdn.npmmirror.com/binaries/electron/${ELECTRON_VERSION}/`
 const mb = (f) => (fs.statSync(f).size / 1048576).toFixed(1) + ' MB'
 
@@ -95,7 +99,7 @@ function verify(zipFile) {
   fs.mkdirSync(RELEASE, { recursive: true })
   fs.mkdirSync(WORK, { recursive: true })
 
-  const file = `electron-v${ELECTRON_VERSION}-win32-x64.zip`
+  const file = `electron-v${ELECTRON_VERSION}-win32-${ARCH}.zip`
   const zipFile = path.join(WORK, file)
   console.log('[1/3] 下载 Electron Windows 运行时')
   await download(MIRROR + file, zipFile)
@@ -116,6 +120,6 @@ function verify(zipFile) {
   console.log('[3/3] 校验包内容')
   verify(ZIP_FILE)
   console.log(`\n完成（${((Date.now() - t0) / 1000 / 60).toFixed(1)} 分钟）：`)
-  console.log('  Windows 绿色版:', ZIP_FILE, mb(ZIP_FILE))
+  console.log(`  Windows 绿色版（${ARCH === 'ia32' ? '32 位' : '64 位'}）:`, ZIP_FILE, mb(ZIP_FILE))
   console.log('  解压后运行 CONTRACT-AMS.exe 即可；.exe 安装包请在 Windows 上执行 npm run package（NSIS）。')
 })().catch((e) => { console.error('\n✗ 打包失败:', e.message); process.exit(1) })
