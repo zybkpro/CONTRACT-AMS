@@ -57,23 +57,19 @@ function render() {
     }],
   }, true)
 
-  // 3) 对内/对外金额对比（V1.2）——金额来自看板收支全景 overview
+  // 3) 对内/对外金额对比（V1.2）——与数量占比一致的环形饼图，金额来自 overview
   const ov = d.overview || {}
   amountChart.setOption({
     backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis', formatter: (params) => {
-      const p = params?.[0]
-      return p ? `${p.name}<br/><b>¥${formatMoney(p.value, 0)}</b>` : ''
-    } },
-    grid: { left: 52, right: 12, top: 26, bottom: 24 },
-    xAxis: { type: 'category', data: ['对外合同(收入)', '对内合同(支出)'], axisLabel: { color: '#8aa2b5', fontSize: 10 }, axisLine: { lineStyle: { color: '#2b4a63' } } },
-    yAxis: { type: 'value', axisLabel: { color: '#8aa2b5', formatter: (v) => (v / 10000) + '万' }, splitLine: { lineStyle: { color: 'rgba(80,120,150,.15)' } } },
-    series: [{ type: 'bar', barMaxWidth: 56,
+    tooltip: { trigger: 'item', formatter: (p) => `${p.name}<br/><b>¥${formatMoney(p.value, 0)}</b> (${p.percent}%)` },
+    legend: { bottom: 0, textStyle: { color: '#8aa2b5' } },
+    series: [{
+      type: 'pie', radius: ['45%', '68%'], center: ['50%', '44%'],
+      label: { color: '#cfe6ff' },
       data: [
-        { value: Number(ov.incomeAmount || 0), itemStyle: { color: gradIncome(), borderRadius: [6, 6, 0, 0] } },
-        { value: Number(ov.expenseAmount || 0), itemStyle: { color: gradExpense(), borderRadius: [6, 6, 0, 0] } },
+        { value: Number(ov.incomeAmount || 0), name: '对外合同', itemStyle: { color: gradIncome() } },
+        { value: Number(ov.expenseAmount || 0), name: '对内合同', itemStyle: { color: gradExpense() } },
       ],
-      label: { show: true, position: 'top', color: '#cfe6ff', fontSize: 11, formatter: (p) => formatMoney(p.value, 0) },
     }],
   }, true)
 }
