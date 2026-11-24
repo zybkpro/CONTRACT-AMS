@@ -3,6 +3,7 @@ import { ref, reactive, watch } from 'vue'
 import { api, isDesktop } from '../api'
 import { toast } from '../utils'
 import ChangePassword from './ChangePassword.vue'
+import ServicePanel from './ServicePanel.vue'
 
 const props = defineProps({
   settings: { type: Object, default: () => ({}) },
@@ -122,7 +123,7 @@ function toggleRemind(d) {
 
 <template>
   <div class="modal-mask" @click.self="emit('close')">
-    <div class="modal modal-lg">
+    <div class="modal modal-lg modal-settings">
       <div class="modal-head"><h3>系统设置</h3><button class="icon-btn" @click="emit('close')">✕</button></div>
       <div class="settings-layout">
         <div class="settings-nav">
@@ -130,7 +131,7 @@ function toggleRemind(d) {
             { k:'dict', l:'合同类型' }, { k:'category', l:'费用分类' }, { k:'code', l:'编号与金额' },
             { k:'approval', l:'审批阈值' }, { k:'remind', l:'提醒与归档' },
             { k:'security', l:'脱敏设置' }, { k:'labels', l:'显示文案' }, { k:'password', l:'修改密码' },
-            ...(role === 'admin' ? [{ k:'data', l:'数据管理' }] : [])
+            ...(role === 'admin' ? [{ k:'service', l:'局域网服务' }, { k:'data', l:'数据管理' }] : [])
           ]" :key="t.k" :class="{ active: tab === t.k }" @click="tab = t.k">{{ t.l }}</button>
         </div>
         <div class="settings-content">
@@ -218,6 +219,9 @@ function toggleRemind(d) {
           <div v-else-if="tab === 'password'" class="setting-section">
             <ChangePassword />
           </div>
+          <div v-else-if="tab === 'service'" class="setting-section">
+            <ServicePanel />
+          </div>
           <div v-else-if="tab === 'data'" class="setting-section">
             <h4>数据管理</h4>
             <p class="hint">备份会导出数据库与全部附件为 zip；清空仅删除业务数据，保留账号与系统设置，且不可恢复。</p>
@@ -231,7 +235,7 @@ function toggleRemind(d) {
       </div>
       <div class="modal-foot">
         <button class="btn ghost" @click="emit('close')">关闭</button>
-        <button v-if="tab !== 'password' && tab !== 'data'" class="btn primary" :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存设置' }}</button>
+        <button v-if="tab !== 'password' && tab !== 'data' && tab !== 'service'" class="btn primary" :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存设置' }}</button>
       </div>
     </div>
 

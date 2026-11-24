@@ -15,8 +15,8 @@ function setSession(t, u) {
 }
 function getCurrentUser() { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null') } catch (_) { return null } }
 
-const phase = ref('token') // token → login → app
-const tokenInput = ref(''), username = ref(''), password = ref('')
+const phase = ref('token') // token → app（口令即门禁，无需账号密码）
+const tokenInput = ref('')
 const currentUser = ref(null)
 const msg = ref(''), busy = ref(false)
 const contracts = ref([]), keyword = ref('')
@@ -45,24 +45,29 @@ async function connectToken() {
   const t = tokenInput.value.trim().toUpperCase()
   if (!t) return flash('请输入局域网访问口令')
   busy.value = true
-  try { await req('/api/auth', { method: 'POST', body: JSON.stringify({ token: t }) }); setToken(t); tokenInput.value = ''; phase.value = 'login' }
-  catch (e) { flash(e.message) } finally { busy.value = false }
-}
-async function login() {
-  const u = username.value.trim(), p = password.value
-  if (!u || !p) return flash('请输入账号和密码')
-  busy.value = true
   try {
-    const d = await req('/api/login', { method: 'POST', body: JSON.stringify({ username: u, password: p }) })
-    setSession(d.token, d.user); currentUser.value = d.user; phase.value = 'app'; await load()
+    const d = await req('/api/auth', { method: 'POST', body: JSON.stringify({ token: t }) })
+    setToken(t); tokenInput.value = ''
+    // 口令校验通过即签发会话，直接进入主界面（无需账号密码）
+    if (d?.session?.token) {
+      setSession(d.session.token, d.session.user)
+      currentUser.value = d.session.user
+      phase.value = 'app'
+      await load()
+    } else {
+      flash('服务未返回登录会话，请确认已升级到最新版本')
+    }
   } catch (e) { flash(e.message) } finally { busy.value = false }
 }
 async function load() {
   try { const d = await req('/api/bootstrap'); contracts.value = d.contracts || [] }
   catch (e) { flash(e.message) }
 }
-function logout() { setSession('', null); currentUser.value = null; contracts.value = []; phase.value = 'login' }
-function logoutAll() { setToken(''); logout(); phase.value = 'token' }
+function logoutAll() {
+  setToken(''); setSession('', null)
+  currentUser.value = null; contracts.value = []; detail.value = null
+  phase.value = 'token'
+}
 
 const filtered = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
@@ -82,13 +87,16 @@ async function submitPay() {
 onMounted(async () => {
   const urlToken = new URLSearchParams(location.search).get('token')
   if (urlToken) { setToken(urlToken.toUpperCase()); tokenInput.value = urlToken.toUpperCase() }
-  if (getToken() && getSession()) {
+  // 已有会话：校验后直接进入（无需重新输口令）
+  if (getSession()) {
     try {
       const d = await req('/api/current')
       if (d.user) { currentUser.value = d.user; phase.value = 'app'; await load(); return }
     } catch (_) {}
+    setSession('', null)
   }
-  if (getToken() && !getSession()) phase.value = 'login'
+  // 只有口令没会话（旧版本残留）：清掉，回到口令页重新进入
+  if (getToken() && !getSession()) setToken('')
 })
 </script>
 
@@ -101,20 +109,11 @@ onMounted(async () => {
 
     <div v-if="msg" class="h5-msg">{{ msg }}</div>
 
-    <!-- 第一步：局域网口令 -->
+    <!-- 局域网口令（口令即门禁，输入后直接进入） -->
     <div v-if="phase === 'token'" class="h5-login">
-      <p>步骤 1 / 2 · 请输入局域网访问口令。</p>
+      <p>请输入局域网访问口令。</p>
       <input v-model="tokenInput" type="text" placeholder="局域网访问口令" @keyup.enter="connectToken" />
-      <button class="h5-btn primary" :disabled="busy" @click="connectToken">{{ busy ? '连接中…' : '下一步' }}</button>
-    </div>
-
-    <!-- 第二步：账号登录 -->
-    <div v-else-if="phase === 'login'" class="h5-login">
-      <p>步骤 2 / 2 · 请用账号登录，权限由账号决定。</p>
-      <input v-model="username" type="text" placeholder="账号（如 finance）" @keyup.enter="login" />
-      <input v-model="password" type="password" placeholder="密码（默认 123456）" @keyup.enter="login" />
-      <button class="h5-btn primary" :disabled="busy" @click="login">{{ busy ? '登录中…' : '登录' }}</button>
-      <button class="h5-btn ghost" @click="logoutAll">返回</button>
+      <button class="h5-btn primary" :disabled="busy" @click="connectToken">{{ busy ? '进入中…' : '进入' }}</button>
     </div>
 
     <!-- 主界面 -->

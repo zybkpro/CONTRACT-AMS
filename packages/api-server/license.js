@@ -29,8 +29,46 @@ function cfg() {
   }
 }
 
+const TRIAL_DAYS = 7
+const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000
+
 function machineFile() { return path.join(db.DATA_DIR, 'machine_id') }
 function licenseFile() { return path.join(db.DATA_DIR, 'license.json') }
+function trialFile() { return path.join(db.DATA_DIR, 'trial.json') }
+
+/** 试用期：首次启动即开始计时，记录到 data/trial.json */
+function loadTrial() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(trialFile(), 'utf8'))
+    const t = Date.parse(raw?.startedAt)
+    if (Number.isFinite(t)) return { startedAt: raw.startedAt, startedMs: t, machineId: raw.machineId || '' }
+  } catch (_) {}
+  return null
+}
+function ensureTrial(machineId) {
+  let tr = loadTrial()
+  if (!tr) {
+    const now = new Date()
+    tr = { startedAt: now.toISOString(), startedMs: now.getTime(), machineId }
+    fs.mkdirSync(db.DATA_DIR, { recursive: true })
+    fs.writeFileSync(trialFile(), JSON.stringify({ startedAt: tr.startedAt, machineId }, null, 2), 'utf8')
+  }
+  return tr
+}
+/** 试用状态：inTrial（是否仍在试用）/ daysLeft（剩余整天）/ endsAt */
+function trialStatus(machineId) {
+  const tr = ensureTrial(machineId || getMachineId())
+  const elapsed = Date.now() - tr.startedMs
+  const inTrial = elapsed < TRIAL_MS
+  const endsMs = tr.startedMs + TRIAL_MS
+  return {
+    inTrial,
+    daysLeft: inTrial ? Math.max(1, Math.ceil((TRIAL_MS - elapsed) / (24 * 60 * 60 * 1000))) : 0,
+    startedAt: tr.startedAt,
+    endsAt: new Date(endsMs).toISOString(),
+    totalDays: TRIAL_DAYS,
+  }
+}
 
 function getMachineId() {
   fs.mkdirSync(db.DATA_DIR, { recursive: true })
@@ -149,7 +187,19 @@ async function getStatus() {
   }
   const lic = loadLicense()
   if (!lic) {
-    return { activated: false, message: '尚未激活，请输入激活码', license: null, machineId, meta }
+    const trial = trialStatus(machineId)
+    if (trial.inTrial) {
+      return {
+        activated: true, inTrial: true, trial,
+        message: `试用中，剩余 ${trial.daysLeft} 天，到期后需购买授权码激活`,
+        license: null, machineId, meta,
+      }
+    }
+    return {
+      activated: false, inTrial: false, trial,
+      message: '7 天试用期已结束，请输入授权码激活后继续使用',
+      license: null, machineId, meta,
+    }
   }
 
   try {
@@ -189,6 +239,29 @@ async function getStatus() {
   }
 }
 
+/**
+ * 同步授权状态（HTTP/H5 端用）：不联网，仅按本地试用 / 本地授权缓存判定。
+ * 桌面端走 getStatus()（会远程 verify）。
+ */
+function getLocalStatus() {
+  const machineId = getMachineId()
+  const meta = publicMeta()
+  if (cfg().skip) return { activated: true, skipped: true, message: '已跳过授权校验（开发模式）', license: loadLicense(), machineId, meta }
+  const lic = loadLicense()
+  if (!lic) {
+    const trial = trialStatus(machineId)
+    if (trial.inTrial) return {
+      activated: true, inTrial: true, trial,
+      message: `试用中，剩余 ${trial.daysLeft} 天，到期后需购买授权码激活`,
+      license: null, machineId, meta,
+    }
+    return { activated: false, inTrial: false, trial,
+      message: '7 天试用期已结束，请输入授权码激活后继续使用', license: null, machineId, meta }
+  }
+  // 已激活：本地未过期即放行（联网严格校验只在桌面端做）
+  return { activated: localStillValid(lic), message: localStillValid(lic) ? '已授权' : '授权已过期', license: lic, machineId, meta }
+}
+
 async function activate(rawCode) {
   const machineId = getMachineId()
   const meta = publicMeta()
@@ -222,8 +295,11 @@ module.exports = {
   saveLicense,
   clearLicense,
   getStatus,
+  getLocalStatus,
   activate,
   verify,
   publicMeta,
   normalizeCode,
+  trialStatus,
+  TRIAL_DAYS,
 }

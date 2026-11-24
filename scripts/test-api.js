@@ -2,6 +2,7 @@
 /** 无 Electron 的核心 API 冒烟测试：直接驱动 db.init + core.dispatch */
 const assert = require('assert')
 const path = require('path')
+const fs = require('fs')
 process.env.CONTRACTAMS_DATA_DIR = path.join(__dirname, '..', 'data-test')
 const db = require(path.join(__dirname, '..', 'packages', 'api-server', 'db'))
 const { dispatch } = require(path.join(__dirname, '..', 'packages', 'api-server', 'core'))
@@ -143,11 +144,13 @@ function call(method, p, body = {}, query = {}) {
   console.log('✓ 项目经理权限逻辑：仅本人项目 / 不可看人员 / 不可登记收付款')
 
   // 17. 修改密码（当前会话）：校验原密码 / 新密码规则 / 改后可用新密码登录
+  assert.strictEqual(call('GET', '/api/current', {}, {}).user.must_change_password, true) // 初始密码强制改
   assert.throws(() => call('POST', '/api/change-password', { old_password: 'wrong', new_password: 'newpass' }), /原密码不正确/)
   assert.throws(() => call('POST', '/api/change-password', { old_password: '123456', new_password: '123' }), /至少 6 位/)
   call('POST', '/api/change-password', { old_password: '123456', new_password: 'admin888' })
+  assert.strictEqual(call('GET', '/api/current', {}, {}).user.must_change_password, false) // 改后标志消失
   assert.ok(call('POST', '/api/login', { username: 'admin', password: 'admin888' }).token)
-  console.log('✓ 修改密码：校验原密码/长度，改后新密码可登录')
+  console.log('✓ 修改密码：校验原密码/长度，首次登录标志改后消失，新密码可登录')
 
   // ===== V1.1 增量 =====
   // 18. 数据迁移：新表新字段
@@ -230,6 +233,22 @@ function call(method, p, body = {}, query = {}) {
   assert.strictEqual(strict.created, 0)
   assert.ok(strict.failed.length > 0)
   console.log('✓ 清空后导入自恢复：自动建相对方/项目，严格模式可关闭')
+
+  // 26. 7 天试用门禁：首次启动放行 / 超期锁定（激活码走 CAPTCHA_SYS）
+  const license = require(path.join(__dirname, '..', 'packages', 'api-server', 'license'))
+  const trialF = path.join(process.env.CONTRACTAMS_DATA_DIR, 'trial.json')
+  try { fs.unlinkSync(trialF) } catch (_) {}
+  let ls = await license.getStatus()
+  assert.strictEqual(ls.activated, true)
+  assert.strictEqual(ls.inTrial, true)
+  assert.strictEqual(ls.trial.daysLeft, 7)
+  // 模拟 8 天前安装：应锁定
+  fs.writeFileSync(trialF, JSON.stringify({ startedAt: new Date(Date.now() - 8 * 86400000).toISOString(), machineId: ls.machineId }))
+  ls = await license.getStatus()
+  assert.strictEqual(ls.activated, false)
+  assert.strictEqual(ls.inTrial, false)
+  assert.strictEqual(ls.trial.daysLeft, 0)
+  console.log('✓ 7 天试用门禁：试用内放行，超期锁定需授权码')
 
   console.log('\n✅ 全部冒烟测试通过')
 })().catch((e) => { console.error('❌ 测试失败:', e.message); console.error(e.stack); process.exit(1) })

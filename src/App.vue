@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { api, setSession, clearSession, getCurrentUser } from './api'
+import { api, licenseApi, setSession, clearSession, getCurrentUser } from './api'
 import {
   LIST_COLUMNS, STATUSES, DIRECTIONS, ROLE_LABEL, STATUS_META, exportContractsToExcel,
   exportLogsToExcel, exportPaymentsToExcel, toast, daysUntil, formatMoney, downloadTemplate,
@@ -17,6 +17,8 @@ import ChartsPanel from './components/ChartsPanel.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import ImportDialog from './components/ImportDialog.vue'
 import InvoicePanel from './components/InvoicePanel.vue'
+import ForceChangePassword from './components/ForceChangePassword.vue'
+import ActivationDialog from './components/ActivationDialog.vue'
 
 const contracts = ref([]), projects = ref([]), parties = ref([])
 const dictTypes = ref([]), dictCategories = ref([]), settings = ref({}), dashboard = ref(null)
@@ -39,6 +41,12 @@ const clock = ref('')
 const currentUser = ref(getCurrentUser())
 const loginReady = ref(false)
 const refreshing = ref(false)   // 右上角刷新按钮的加载态
+const forceChange = ref(false)  // 首次登录强制改密弹窗
+// 授权门禁：7 天试用 / 激活码（CAPTCHA_SYS）
+const licenseChecking = ref(true)
+const licenseOk = ref(false)
+const licenseInfo = ref(null)
+const licenseDialog = ref(false)
 let timer = null
 
 // 角色/归属由登录账号决定（不可用视角下拉切换）
@@ -127,8 +135,16 @@ function onLoggedIn(user, reused = false) {
   if (view.value === 'user' && user.role !== 'admin') view.value = 'ledger'
   if (!reused) toast(`欢迎，${user.name}（${ROLE_LABEL[user.role] || user.role}）`, 'success')
   load()
+  // 首次登录（密码仍是初始 123456）强制弹改密窗，改完才放行
+  forceChange.value = !!user.must_change_password
+  if (forceChange.value) return
   const q = new URLSearchParams(location.search)
   if (q.get('dialog') === 'settings') dialog.value = { name: 'settings', payload: { tab: q.get('tab') || 'dict' } }
+}
+/** 强制改密完成：更新会话用户并继续后续加载 */
+function onForceChanged(user) {
+  forceChange.value = false
+  currentUser.value = user
 }
 /** 退出登录：清会话、清数据、回到登录页 */
 async function onLogout() {
@@ -136,14 +152,50 @@ async function onLogout() {
   clearSession()
   currentUser.value = null
   loginReady.value = false
+  forceChange.value = false
   view.value = 'ledger'
   contracts.value = []; projects.value = []; parties.value = []; dashboard.value = null
   detail.value = null; dialog.value = null; selectedId.value = ''
   toast('已退出登录', 'info')
 }
 
+/** 授权门禁：7 天试用内放行，到期后必须输入授权码激活 */
+async function checkLicense() {
+  licenseChecking.value = true
+  try {
+    const s = await licenseApi.status()
+    licenseInfo.value = s
+    licenseOk.value = !!s.activated
+    if (s.inTrial) {
+      // 试用提醒只提示一次/天，避免每次启动都弹 toast
+      const key = 'contractams-trial-toast'
+      const today = new Date().toDateString()
+      if (localStorage.getItem(key) !== today) {
+        toast(`试用期剩余 ${s.trial?.daysLeft || 7} 天，到期后需购买授权码激活`, 'info')
+        try { localStorage.setItem(key, today) } catch (_) {}
+      }
+    }
+  } catch (e) {
+    licenseOk.value = false
+    licenseInfo.value = { activated: false, message: e.message || '授权校验失败' }
+  } finally {
+    licenseChecking.value = false
+  }
+}
+/** 激活成功：收起授权页，恢复进入 */
+function onActivated(s) {
+  licenseOk.value = true
+  licenseInfo.value = s
+  licenseDialog.value = false
+  toast('激活成功，感谢您的支持', 'success')
+}
+/** 手动打开授权页（试用期内查看/购买授权） */
+function openLicenseDialog() { licenseDialog.value = true }
+
 onMounted(async () => {
   tick(); timer = setInterval(tick, 1000)
+  await checkLicense()
+  if (!licenseOk.value) return
   if (currentUser.value) onLoggedIn(currentUser.value, true)
 })
 onBeforeUnmount(() => { clearInterval(timer) })
@@ -258,8 +310,25 @@ async function onDataCleared() {
 
 <template>
   <div class="app-shell">
+    <!-- 授权门禁：7 天试用内放行，到期后全屏授权页（不可关闭） -->
+    <ActivationDialog
+      v-if="!licenseChecking && !licenseOk"
+      :initial="licenseInfo"
+      @activated="onActivated"
+    />
+    <!-- 试用期内主动查看/购买授权：可关闭 -->
+    <ActivationDialog
+      v-if="licenseDialog && licenseOk"
+      :initial="licenseInfo"
+      :closable="true"
+      @activated="onActivated"
+      @close="licenseDialog = false"
+    />
+    <template v-if="licenseOk">
     <!-- 门禁：账号登录（权限由账号决定，无视角下拉） -->
     <LoginDialog v-if="!loginReady" @logged-in="onLoggedIn" />
+    <!-- 首次登录强制改密：不可取消，覆盖整个界面 -->
+    <ForceChangePassword v-if="forceChange" @done="onForceChanged" />
 
     <template v-if="loginReady">
       <!-- 顶部栏 -->
@@ -269,6 +338,9 @@ async function onDataCleared() {
           <h1>合同管理系统</h1>
         </div>
         <div class="top-status">
+          <button v-if="licenseInfo?.inTrial" class="trial-chip" @click="openLicenseDialog" title="查看授权 / 购买正式版">
+            试用剩余 {{ licenseInfo.trial?.daysLeft }} 天
+          </button>
           <span class="online"><span class="dot"></span>本机数据已连接</span>
           <span class="clock">{{ clock }}</span>
           <span class="current-account" :title="`${currentUser?.name}（${ROLE_LABEL[currentUser?.role] || currentUser?.role}）`">
@@ -276,11 +348,17 @@ async function onDataCleared() {
             <b>{{ currentUser?.name }}</b>
             <span class="tag-cell tag-cyan">{{ ROLE_LABEL[currentUser?.role] || currentUser?.role }}</span>
           </span>
-          <button class="icon-btn refresh-btn" :class="{ spinning: refreshing }" :disabled="refreshing" @click="refreshData" title="刷新数据" aria-label="刷新数据">
-            <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <button class="icon-btn top-icon-btn refresh-btn" :class="{ spinning: refreshing }" :disabled="refreshing" @click="refreshData" title="刷新数据" aria-label="刷新数据">
+            <svg class="top-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <polyline points="23 4 23 10 17 10" />
               <polyline points="1 20 1 14 7 14" />
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+          </button>
+          <button class="icon-btn top-icon-btn" @click="dialog = { name: 'settings', payload: { tab: 'dict' } }" title="系统设置" aria-label="系统设置">
+            <svg class="top-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
           </button>
           <button class="btn ghost btn-sm" @click="onLogout" title="退出登录">退出</button>
@@ -331,11 +409,9 @@ async function onDataCleared() {
           <span class="spacer"></span>
           <input v-model="keyword" class="search-input" type="text" placeholder="编号 / 名称 / 相对方 / 负责人…" @keyup.enter="() => {}" />
           <button class="btn btn-ghost" @click="resetFilter">重置</button>
-          <button class="btn" @click="dialog = { name: 'settings', payload: { tab: 'dict' } }">设置</button>
         </template>
         <template v-else>
           <span class="spacer"></span>
-          <button class="btn" @click="dialog = { name: 'settings', payload: { tab: 'dict' } }">设置</button>
         </template>
       </div>
 
@@ -426,6 +502,7 @@ async function onDataCleared() {
       :message="'请选择操作：归档（只读）或删除（不可恢复）。'" confirm-text="归档" @cancel="dialog = null"
       @confirm="doArchive(dialog.payload.row, 'archive')" />
 
+    </template>
     <ToastStack />
   </div>
 </template>

@@ -11,7 +11,7 @@ const fs = require('fs')
 const path = require('path')
 const db = require('./db')
 const license = require('./license')
-const { dispatch, ApiError } = require('./core')
+const { dispatch, ApiError, lanSession } = require('./core')
 
 const DIST = path.join(db.ROOT, 'dist')
 // V1.3：可选 HTTPS 自签证书。局域网 http:// 下浏览器禁止调用摄像头，
@@ -160,7 +160,9 @@ class LanServer {
         if (String(body.token || '').trim().toUpperCase() !== String(cfg.token).toUpperCase()) {
           return this.send(res, 401, { ok: false, error: '访问口令不正确' })
         }
-        return this.send(res, 200, { ok: true, data: { authenticated: true } })
+        // 口令即门禁：校验通过直接签发会话，H5 无需再输入账号密码
+        const session = typeof lanSession === 'function' ? lanSession() : null
+        return this.send(res, 200, { ok: true, data: { authenticated: true, session } })
       }
       if (p === '/api/service/status' && req.method === 'GET') {
         const s = this.status()

@@ -9,9 +9,6 @@ const password = ref('')
 const busy = ref(false)
 const err = ref('')
 const checking = ref(true)
-const quickAccounts = [
-  { username: 'admin', label: '超级管理员', pwd: '123456' },
-]
 
 onMounted(async () => {
   // 已有有效会话则直接放行
@@ -20,8 +17,6 @@ onMounted(async () => {
     if (d.user) emit('logged-in', d.user, true)
   } catch (_) {} finally { checking.value = false }
 })
-
-function useQuick(a) { username.value = a.username; password.value = a.pwd; err.value = '' }
 
 async function login() {
   err.value = ''
@@ -50,14 +45,6 @@ async function login() {
           <label class="field"><span>密码</span><input v-model="password" type="password" placeholder="密码" @keyup.enter="login" /></label>
           <div v-if="err" class="login-err">{{ err }}</div>
           <button class="btn primary login-submit" :disabled="busy" @click="login">{{ busy ? '登录中…' : '登录' }}</button>
-        </div>
-        <div class="login-quick">
-          <div class="login-quick-title">演示账号（点击填入，密码 123456）</div>
-          <div class="login-quick-grid">
-            <button v-for="a in quickAccounts" :key="a.username" @click="useQuick(a)">
-              <b>{{ a.label }}</b><span>{{ a.username }}</span>
-            </button>
-          </div>
         </div>
       </template>
     </div>

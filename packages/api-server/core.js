@@ -175,7 +175,9 @@ function dashboard(list) {
 function publicUser(u) {
   if (!u) return null
   const { password_hash, ...rest } = u
-  return { ...rest, role_label: db.ROLE_LABEL[u.role] || u.role, is_super: !!u.is_super }
+  // 首次登录：密码仍是初始 123456 时强制修改（改过一次后自动消失）
+  const mustChangePassword = password_hash === db.hashPassword('123456')
+  return { ...rest, role_label: db.ROLE_LABEL[u.role] || u.role, is_super: !!u.is_super, must_change_password: mustChangePassword }
 }
 /** 从 token 解析当前用户；token 来自 ctx.token 或 query/body */
 function resolveUser(ctx, query, body) {
@@ -192,6 +194,17 @@ function issueToken(userId) {
   const token = db.uid('tok') + '-' + Math.random().toString(36).slice(2, 10)
   db.run('INSERT INTO user_session (token,user_id,created_at,last_active) VALUES (?,?,?,?)', [token, userId, db.now(), db.now()])
   return token
+}
+
+/**
+ * 局域网口令登录后签发会话：口令即门禁，持有者以管理员身份进入。
+ * 仅用于 http.js 的 /api/auth 口令校验成功后调用；受 h5ReadOnly 只读约束。
+ */
+function lanSession() {
+  const admin = db.one("SELECT * FROM app_user WHERE role='admin' AND status='启用' ORDER BY is_super DESC, id ASC LIMIT 1")
+  if (!admin) return null
+  const token = issueToken(admin.id)
+  return { token, user: publicUser(admin) }
 }
 
 /* ==================== dispatch ==================== */
@@ -238,6 +251,14 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
   // 除公共接口外，均需登录
   const PUBLIC = ['/api/health', '/api/auth', '/api/license/status', '/api/license/activate', '/api/license/verify']
   if (!currentUser && !PUBLIC.includes(p)) throw new ApiError(401, '请先登录')
+
+  // ---------- 授权（7 天试用 / CAPTCHA_SYS 激活码，公共接口） ----------
+  // HTTP/H5 端用同步本地判定（不联网）；激活码输入走桌面端 IPC（带 Token 调 CAPTCHA_SYS）
+  const licenseMod = require('./license')
+  if (p === '/api/license/status' && method === 'GET') return { status: 200, data: licenseMod.getLocalStatus() }
+  if (p === '/api/license/verify' && method === 'POST') return { status: 200, data: licenseMod.getLocalStatus() }
+  if (p === '/api/license/activate' && method === 'POST')
+    throw new ApiError(400, '请在桌面端「授权激活」中输入授权码')
 
   // ---------- 修改密码（当前登录账号） ----------
   if (p === '/api/change-password' && method === 'POST') {
@@ -1051,4 +1072,4 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
   throw new ApiError(404, `未知接口：${method} ${p}`)
 }
 
-module.exports = { dispatch, ApiError, dashboard, contractView }
+module.exports = { dispatch, ApiError, dashboard, contractView, lanSession }

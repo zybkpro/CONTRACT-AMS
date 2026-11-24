@@ -7,6 +7,7 @@ data/*.sqlite.tmp
 data/config.json
 data/license.json
 data/machine_id
+data/trial.json
 data/media/*
 !data/media/.gitkeep
 data/backups/
@@ -15,5 +16,8 @@ data/backups/
 .workbuddy/
 node_modules
 data-test/*.sqlite
+data-test/machine_id
+data-test/trial.json
+data-test/license.json
 data-test/media/*
 !data-test/media/.gitkeep
