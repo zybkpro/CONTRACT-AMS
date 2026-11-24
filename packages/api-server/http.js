@@ -28,9 +28,18 @@ const MIME = {
   '.wasm': 'application/wasm', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
 }
 
-// 安全控制台输出：后台运行/Windows 无控制台时 stdout 可能已关闭，
-// console.log 写入会抛 EIO 导致主进程崩溃，必须吞掉。
-function safeLog(msg) { try { process.stdout.write(`[CONTRACT-AMS] ${msg}\n`) } catch (_) {} }
+// 安全日志输出：绝不写 stdout（后台/无控制台环境写入会异步抛 EIO 导致主进程崩溃），
+// 只追加到 data/app.log；错误一律吞掉，日志失败不影响服务。
+function safeLog(msg) {
+  try {
+    const dir = process.env.CONTRACTAMS_DATA_DIR
+    if (!dir) return
+    const fs = require('fs'), path = require('path')
+    const f = path.join(dir, 'app.log')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.appendFileSync(f, `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${msg}\n`, 'utf8')
+  } catch (_) {}
+}
 
 function isLoopback(addr) {
   if (!addr) return false

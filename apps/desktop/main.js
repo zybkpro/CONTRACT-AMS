@@ -23,18 +23,21 @@ if (!process.env.CONTRACTAMS_DATA_DIR) {
     : path.join(ROOT, 'data')
 }
 
+// 兜底：后台运行/Windows 无控制台时 stdout/stderr 可能是已关闭的管道，
+// 向其写入会以 async 'error' 事件抛出 EIO/EPIPE（try/catch 捕获不到）→ 主进程崩溃弹窗。
+// 必须挂 error 监听器吞掉，且所有日志只写文件、绝不写 stdout。
+try { process.stdout.on('error', () => {}) } catch (_) {}
+try { process.stderr.on('error', () => {}) } catch (_) {}
+
 // V1.2 启动诊断日志：Win10「有进程无窗口」等问题可查 data/app.log
 const LOG_FILE = path.join(process.env.CONTRACTAMS_DATA_DIR, 'app.log')
 function appLog(msg) {
   const line = `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${msg}\n`
-  // 文件日志必须落盘（Win10 无窗口时靠它诊断）
+  // 只写文件，不写控制台（控制台在后台/无控制台环境会 EIO 崩溃）
   try {
     fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true })
     fs.appendFileSync(LOG_FILE, line, 'utf8')
   } catch (_) {}
-  // 控制台输出：后台运行/Windows 无控制台时 stdout 可能已关闭，
-  // console.log 写入会抛 EIO，必须吞掉，否则主进程未捕获异常直接崩溃弹窗。
-  try { process.stdout.write(`[CONTRACT-AMS] ${msg}\n`) } catch (_) {}
 }
 const OS_INFO = `${process.platform} ${process.arch} ${require('os').release()}`
 appLog(`=== 启动 === 版本 ${require(path.join(ROOT, 'package.json')).version} | 系统 ${OS_INFO} | 软件渲染 ${process.env.CONTRACTAMS_SOFTWARE_RENDER === '1' ? '开' : '关'}`)
