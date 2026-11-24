@@ -399,8 +399,18 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     fs.mkdirSync(db.DATA_DIR, { recursive: true })
     fs.writeFileSync(tmp, bytes)
     try {
-      const r = backup.restoreFromZip(tmp, { keepAccounts: body.keepAccounts !== false })
-      return { status: 200, data: r }
+      const keepAccounts = body.keepAccounts !== false
+      const r = backup.restoreFromZip(tmp, { keepAccounts })
+      // V1.2：恢复会整体替换 sqlite（含 user_session 表），旧会话 token 不在备份库里，
+      // 若不处理前端随后刷新数据会 401「请先登录」。保留账号时用当前用户重新签发会话。
+      let sessionToken = ''
+      if (keepAccounts && currentUser) {
+        try {
+          const stillExists = db.one('SELECT id FROM app_user WHERE id=?', [currentUser.id])
+          if (stillExists) sessionToken = issueToken(currentUser.id)
+        } catch (_) {}
+      }
+      return { status: 200, data: { ...r, sessionToken } }
     } finally {
       try { fs.unlinkSync(tmp) } catch (_) {}
     }

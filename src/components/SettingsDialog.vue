@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, watch, computed } from 'vue'
-import { api, isDesktop } from '../api'
+import { api, isDesktop, setSession, getCurrentUser } from '../api'
 import { toast } from '../utils'
 import ChangePassword from './ChangePassword.vue'
 import ServicePanel from './ServicePanel.vue'
@@ -124,6 +124,9 @@ async function doRestore() {
       reader.readAsDataURL(restoreFile.value)
     })
     const r = await api.restoreBackup(b64, true)
+    // 恢复会替换数据库（含会话表），后端已为新库重新签发会话，前端必须更新，
+    // 否则随后的数据刷新会因旧 token 失效而报「请先登录」。
+    if (r.sessionToken) setSession(r.sessionToken, getCurrentUser())
     restoreDialog.value = false
     toast(r.message || '恢复完成', 'success')
     emit('saved', { restored: true })
