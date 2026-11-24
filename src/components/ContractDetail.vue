@@ -86,9 +86,12 @@ async function openFile(f, download = false) {
     if (!info.exists) { toast('文件不存在或已被移动，请联系管理员', 'error'); return }
     if (isDesktop) {
       // 桌面端：走主进程 IPC，避免 window.open(file://) 被拦截导致"无反应"
-      const r = download
+      const result = download
         ? await window.contractams.file.save(info.absPath, info.fileName)
         : await window.contractams.file.preview(info.absPath)
+      // IPC 主进程 wrap() 包成 { ok, data }，需解包 data 再判断
+      if (result?.ok === false) throw new Error(result.error || '操作失败')
+      const r = result?.data || result
       if (r?.ok === false) throw new Error(r.error || '操作失败')
       if (r?.canceled) return
       toast(download ? '文件已保存到指定目录' : '已用系统应用打开', 'success')

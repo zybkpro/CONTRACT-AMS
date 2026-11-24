@@ -82,7 +82,10 @@ async function manualBackup() {
     if (isDesktop && window.contractams?.file?.save) {
       const r = await api.runBackup(cfg.autoBackup?.dir || '')
       const name = r.file.split(/[\\/]/).pop()
-      const saved = await window.contractams.file.save(r.file, name)
+      const result = await window.contractams.file.save(r.file, name)
+      // IPC 主进程 wrap() 会把返回值包成 { ok, data }，需解包 data
+      if (result?.ok === false) throw new Error(result.error || '保存失败')
+      const saved = result?.data || result
       if (saved?.canceled) { toast('已取消，备份文件仍保存在数据目录', 'info'); return }
       toast(`已导出：${saved.savedPath}`, 'success')
       return
