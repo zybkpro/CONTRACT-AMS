@@ -32,7 +32,8 @@ const DEFAULT_SETTINGS = {
   exportColumns: ['contract_no', 'title', 'direction', 'type', 'status', 'project_name', 'party_name', 'our_entity', 'amount', 'currency', 'sign_date', 'start_date', 'end_date', 'owner'],
   roles: { admin: '管理员', biz: '商务', pm: '项目经理', finance: '财务' },
   onlyAdminLogin: true,     // 当前仅开放超级管理员登录（临时简化，可关闭恢复多角色）
-  // V1.1 新增设置
+  // V1.2 新增设置
+  recycleKeepDays: 30,      // 回收站保留天数，0=不自动清理
   appVersion: '1.1.0',
   showNetAmount: false,        // 看板是否显示「在签净额」
   amountEntryBasis: '含税',    // 录入口径：含税 / 不含税
@@ -63,6 +64,7 @@ function hashPassword(pwd, salt = 'contractams') {
 }
 
 let db = null
+let SQLCtor = null // 缓存 sql.js 构造器，供 reload() 重建内存库
 
 function now() {
   const d = new Date()
@@ -77,6 +79,7 @@ async function init() {
   ensureDirs()
   const wasmDir = path.dirname(require.resolve('sql.js'))
   const SQL = await initSqlJs({ locateFile: (f) => path.join(wasmDir, f) })
+  SQLCtor = SQL
   db = fs.existsSync(DB_FILE) ? new SQL.Database(fs.readFileSync(DB_FILE)) : new SQL.Database()
   db.run('PRAGMA foreign_keys = ON')
   createTables()
@@ -225,6 +228,10 @@ function migrate() {
   addColumn('contract', 'tax_amount', 'REAL DEFAULT 0')
   addColumn('contract', 'tax_rate', 'REAL DEFAULT 0')
   addColumn('contract', 'category_id', "TEXT DEFAULT ''")
+  // V1.2：软删除（回收站），NULL=正常，非空=删除时间
+  addColumn('contract', 'deleted_at', 'TEXT DEFAULT NULL')
+  // V1.2：合同文字摘录/备注（纸质合同关键条款录入）
+  addColumn('contract', 'text_note', "TEXT DEFAULT ''")
   addColumn('payment_plan', 'nature', "TEXT DEFAULT 'contract'")
   addColumn('payment_record', 'nature', "TEXT DEFAULT 'contract'")
   // 老库已有的合同：nature 已在 ALTER 时默认 contract；金额字段默认 0 即可（旧 amount 视为价税合计）
@@ -234,6 +241,11 @@ function migrate() {
   for (let i = 0; i < CATEGORIES.length; i++) {
     if (!one('SELECT id FROM dict_category WHERE name=?', [CATEGORIES[i]]))
       run('INSERT INTO dict_category (id,name,sort_order) VALUES (?,?,?)', [uid('cat'), CATEGORIES[i], i])
+  }
+  // V1.2：项目收款/支付合同类型（幂等补入，老库也有）
+  for (const [name, scope, order] of [['项目收款合同', '对外', 8], ['项目支付合同', '对内', 9]]) {
+    if (!one('SELECT id FROM dict_type WHERE name=?', [name]))
+      run('INSERT INTO dict_type (id,name,direction_scope,sort_order) VALUES (?,?,?,?)', [uid('dt'), name, scope, order])
   }
   if (!one("SELECT value FROM settings WHERE key='app_version'")) setSetting('app_version', '1.1.0')
 }
@@ -306,6 +318,17 @@ function persist() {
 }
 function mutate(fn) { const r = fn(); persist(); return r }
 
+/**
+ * 从磁盘 DB_FILE 重新加载内存库（备份恢复后调用）。
+ * 备份库本身已含完整表结构与数据，不跑 createTables/migrate/seed，避免污染恢复结果。
+ */
+function reload() {
+  if (!SQLCtor) throw new Error('数据库尚未初始化')
+  if (!fs.existsSync(DB_FILE)) throw new Error('数据库文件不存在，无法重新加载')
+  db = new SQLCtor.Database(fs.readFileSync(DB_FILE))
+  db.run('PRAGMA foreign_keys = ON')
+}
+
 function getSettings() {
   const out = { ...DEFAULT_SETTINGS }
   for (const row of all('SELECT key, value FROM settings')) {
@@ -339,7 +362,7 @@ function bootstrap() {
   const parties = all('SELECT * FROM party ORDER BY name, rowid')
   const pName = Object.fromEntries(projects.map((p) => [p.id, p.name]))
   const ptName = Object.fromEntries(parties.map((p) => [p.id, p.name]))
-  const contracts = all('SELECT * FROM contract ORDER BY created_at DESC, rowid DESC').map((c) => {
+  const contracts = all('SELECT * FROM contract WHERE deleted_at IS NULL ORDER BY created_at DESC, rowid DESC').map((c) => {
     const plans = all('SELECT direction, plan_amount FROM payment_plan WHERE contract_id=?', [c.id])
     const recIn = one(`SELECT COALESCE(SUM(r.amount),0) AS n FROM payment_record r LEFT JOIN payment_plan p ON p.id=r.plan_id
       WHERE r.contract_id=? AND (p.direction='应收' OR p.id IS NULL)`, [c.id]).n
@@ -434,6 +457,10 @@ function clearBusinessData() {
       try { counts[t] = one(`SELECT COUNT(*) AS n FROM ${t}`).n || 0 } catch (_) { counts[t] = 0 }
       run(`DELETE FROM ${t}`)
     }
+    // V1.2：内置的项目收/付合同类型随清空后重建（与内置分类字典同理）
+    for (const [name, scope, order] of [['项目收款合同', '对外', 8], ['项目支付合同', '对内', 9]]) {
+      run('INSERT INTO dict_type (id,name,direction_scope,sort_order) VALUES (?,?,?,?)', [uid('dt'), name, scope, order])
+    }
   })
   // 附件：逐个合同目录删除，保留 MEDIA_DIR 本身
   let filesRemoved = 0
@@ -481,7 +508,7 @@ function lanIPs() {
 module.exports = {
   ROOT, DATA_DIR, DB_FILE, MEDIA_DIR, CONFIG_FILE, DEFAULT_SETTINGS, STATUS, DIRECTION, ROLES, ROLE_LABEL,
   INVOICE_DIRECTIONS, INVOICE_TYPES, INVOICE_STATUS, PAY_NATURES, PAY_NATURE_LABEL, CATEGORIES,
-  init, now, uid, run, all, one, persist, mutate, bootstrap, addLog,
+  init, reload, now, uid, run, all, one, persist, mutate, bootstrap, addLog,
   nextCode, codeExists, contractFileDir, mediaFilePath, removeMediaFile, clearBusinessData, mask, visible,
   getSettings, setSetting, getConfig, saveConfig, lanIPs,
   hashPassword, ensureDefaultUsers, migrate,

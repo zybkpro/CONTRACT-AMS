@@ -175,8 +175,12 @@ function call(method, p, body = {}, query = {}) {
   const supp1 = mkSupp(), supp2 = mkSupp()
   assert.ok(supp1.contract_no.endsWith('-1') && supp2.contract_no.endsWith('-2'))
   assert.strictEqual(call('GET', `/api/contracts/${main.id}`, {}, {}).children.length, 2)
-  assert.throws(() => call('DELETE', `/api/contracts/${main.id}`), /存在补充协议/)
-  console.log('✓ 补充协议：编号 -n 递增 / 主合同禁删')
+  // V1.2：删除改为软删除，主合同可移入回收站（附件不物理删），再恢复供后续测试使用
+  const del = call('DELETE', `/api/contracts/${main.id}`)
+  assert.strictEqual(del.recycled, true)
+  assert.throws(() => call('GET', `/api/contracts/${main.id}`), /回收站/)
+  call('POST', `/api/recycle/${main.id}/restore`)
+  console.log('✓ 补充协议：编号 -n 递增 / 主合同软删除进回收站并可恢复')
 
   // 21. 发票登记：税额计算 / 作废旧计
   const inv = call('POST', '/api/invoices', { contractId: main.id, direction: '开票', invoice_type: '专票',
@@ -249,6 +253,44 @@ function call(method, p, body = {}, query = {}) {
   assert.strictEqual(ls.inTrial, false)
   assert.strictEqual(ls.trial.daysLeft, 0)
   console.log('✓ 7 天试用门禁：试用内放行，超期锁定需授权码')
+
+  // ===== V1.2 增量（前面测试 25 最后清了库，这里重新导入数据） =====
+  call('POST', '/api/import', { rows: exportRows })
+  // 27. 软删除与回收站
+  const victim = db.all('SELECT id FROM contract LIMIT 1')[0].id
+  const beforeList = call('GET', '/api/contracts').list.length
+  assert.strictEqual(call('DELETE', `/api/contracts/${victim}`).recycled, true)
+  assert.strictEqual(call('GET', '/api/contracts').list.length, beforeList - 1)
+  assert.ok(call('GET', '/api/recycle').list.some((c) => c.id === victim))
+  assert.throws(() => call('GET', `/api/contracts/${victim}`), /回收站/)
+  call('POST', `/api/recycle/${victim}/restore`)
+  assert.strictEqual(call('GET', '/api/contracts').list.length, beforeList)
+  console.log('✓ 软删除回收站：移入/隐藏/拒绝访问/恢复')
+
+  // 28. 项目收付合同类型与统计
+  const typeNames = call('GET', '/api/dict-types').list.map((t) => t.name)
+  assert.ok(typeNames.includes('项目收款合同') && typeNames.includes('项目支付合同'))
+  const pstats = call('GET', '/api/stats/by-project').list
+  if (pstats.length) assert.ok('receiveAmount' in pstats[0] && 'payAmount' in pstats[0] && 'netAmount' in pstats[0])
+  console.log('✓ 项目收/付合同：类型预置 + 统计字段')
+
+  // 29. 文字摘录字段
+  const noteId = db.all('SELECT id FROM contract LIMIT 1')[0].id
+  const withNote = call('PUT', `/api/contracts/${noteId}`, { ...call('GET', `/api/contracts/${noteId}`), text_note: '测试摘录：甲方应于每月5日前付款' })
+  assert.strictEqual(withNote.text_note, '测试摘录：甲方应于每月5日前付款')
+  console.log('✓ 文字摘录字段：保存与读取')
+
+  // 30. 备份导出与恢复（隔离到临时目录，避免污染主测试库）
+  const backup = require(path.join(__dirname, '..', 'packages', 'api-server', 'backup'))
+  const bdir = path.join(process.env.CONTRACTAMS_DATA_DIR, 'bk-test')
+  const r = backup.createBackup(bdir)
+  assert.ok(r.file && r.files >= 1)
+  const cntBefore = call('GET', '/api/health').contracts
+  db.run('DELETE FROM contract WHERE id=?', [victim]); db.persist()
+  const rr = backup.restoreFromZip(r.file)
+  assert.strictEqual(rr.ok, true)
+  assert.strictEqual(call('GET', '/api/health').contracts, cntBefore)
+  console.log('✓ 备份恢复：导出→改动→恢复→数据还原')
 
   console.log('\n✅ 全部冒烟测试通过')
 })().catch((e) => { console.error('❌ 测试失败:', e.message); console.error(e.stack); process.exit(1) })

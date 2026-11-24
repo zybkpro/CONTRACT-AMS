@@ -43,7 +43,7 @@ async function doImport() {
 </script>
 
 <template>
-  <div class="modal-mask" @click.self="emit('close')">
+  <div class="modal-mask">
     <div class="modal">
       <div class="modal-head"><h3>导入合同台账</h3><button class="icon-btn" @click="emit('close')">✕</button></div>
       <div class="modal-body">

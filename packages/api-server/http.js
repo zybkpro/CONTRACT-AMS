@@ -28,6 +28,10 @@ const MIME = {
   '.wasm': 'application/wasm', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
 }
 
+// 安全控制台输出：后台运行/Windows 无控制台时 stdout 可能已关闭，
+// console.log 写入会抛 EIO 导致主进程崩溃，必须吞掉。
+function safeLog(msg) { try { process.stdout.write(`[CONTRACT-AMS] ${msg}\n`) } catch (_) {} }
+
 function isLoopback(addr) {
   if (!addr) return false
   return /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1|localhost)$/i.test(addr)
@@ -91,7 +95,7 @@ class LanServer {
       this.server.on('error', (e) => { this.error = e.message })
       this.error = ''
       this.startedAt = db.now()
-      console.log(`[CONTRACT-AMS] 局域网服务已启动: ${secure ? 'https' : 'http'}://0.0.0.0:${port}  H5: /h5/  口令: ${cfg.token}`)
+      safeLog(`局域网服务已启动: ${secure ? 'https' : 'http'}://0.0.0.0:${port}  H5: /h5/  口令: ${cfg.token}`)
       return this.status()
     } catch (e) {
       this.server = null
@@ -106,7 +110,7 @@ class LanServer {
     this.server = null
     await new Promise((resolve) => { try { s.close(() => resolve()) } catch (_) { resolve() } })
     this.startedAt = ''
-    console.log('[CONTRACT-AMS] 局域网服务已停止')
+    safeLog('局域网服务已停止')
     return this.status()
   }
 
@@ -294,7 +298,7 @@ class LanServer {
         <h2>合同管理系统</h2><p>前端尚未构建，请先执行 <code>npm run build</code>。</p>
         <p>API 已就绪：<a style="color:#3fd3ff" href="/api/health">/api/health</a></p></body>`, { 'Content-Type': MIME['.html'] })
     } catch (err) {
-      if (!(err instanceof ApiError)) console.error('[CONTRACT-AMS HTTP]', err)
+      if (!(err instanceof ApiError)) safeLog(`✗ HTTP 异常：${err?.stack || err?.message || err}`)
       return this.send(res, err.status || 500, { ok: false, error: err.message || '服务内部错误' })
     }
   }

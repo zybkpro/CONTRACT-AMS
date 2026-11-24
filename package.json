@@ -17,6 +17,8 @@
     "package:mac": "npm run build && node scripts/package-mac.js",
     "package:win": "npm run build && node scripts/package-win-portable.js",
     "package:win32": "npm run build && node scripts/package-win-portable.js ia32",
+    "package:win7": "npm run build && node scripts/package-win7.js",
+    "package:win7-32": "npm run build && node scripts/package-win7.js ia32",
     "test:api": "node scripts/test-api.js"
   },
   "dependencies": {

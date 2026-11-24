@@ -16,12 +16,15 @@ const { readZip, writeZip } = require('./lib/zip')
 
 const ROOT = path.join(__dirname, '..')
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
-const ELECTRON_VERSION = '33.4.9'
+// V1.2：可用环境变量覆盖 Electron 版本，打 Win7 兼容版（Electron 22.3.27 是最后支持 Win7 的分支）
+const ELECTRON_VERSION = process.env.CONTRACTAMS_ELECTRON_VERSION || '33.4.9'
+const IS_WIN7 = process.env.CONTRACTAMS_WIN7 === '1'
 const RELEASE = path.join(ROOT, 'release')
-const WORK = path.join(ROOT, '.packaging', 'win')
+const WORK = path.join(ROOT, '.packaging', IS_WIN7 ? 'win7' : 'win')
 const ARCH = (process.argv[2] === 'ia32') ? 'ia32' : 'x64'
 const ARCH_LABEL = ARCH === 'ia32' ? 'Windows32位' : 'Windows'
-const ZIP_FILE = path.join(RELEASE, `合同管理系统-${ARCH_LABEL}-${VERSION}-绿色版.zip`)
+const EDITION = IS_WIN7 ? 'Win7兼容版' : '绿色版'
+const ZIP_FILE = path.join(RELEASE, `合同管理系统-${ARCH_LABEL}-${VERSION}-${EDITION}.zip`)
 const MIRROR = `https://cdn.npmmirror.com/binaries/electron/${ELECTRON_VERSION}/`
 const mb = (f) => (fs.statSync(f).size / 1048576).toFixed(1) + ' MB'
 
@@ -114,6 +117,9 @@ function verify(zipFile) {
     out.push(e)
   }
   out.push(...appEntries())
+  // V1.2：附带安全模式启动脚本（GPU 兼容问题一键启动）
+  const safeBat = path.join(__dirname, 'win-safe-mode.bat')
+  if (fs.existsSync(safeBat)) out.push({ name: '安全模式启动.bat', data: fs.readFileSync(safeBat), mode: 0o100644 })
   writeZip(ZIP_FILE, out)
   src.length = 0; out.length = 0
 

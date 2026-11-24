@@ -23,6 +23,26 @@ if (!process.env.CONTRACTAMS_DATA_DIR) {
     : path.join(ROOT, 'data')
 }
 
+// V1.2 启动诊断日志：Win10「有进程无窗口」等问题可查 data/app.log
+const LOG_FILE = path.join(process.env.CONTRACTAMS_DATA_DIR, 'app.log')
+function appLog(msg) {
+  const line = `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${msg}\n`
+  // 文件日志必须落盘（Win10 无窗口时靠它诊断）
+  try {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true })
+    fs.appendFileSync(LOG_FILE, line, 'utf8')
+  } catch (_) {}
+  // 控制台输出：后台运行/Windows 无控制台时 stdout 可能已关闭，
+  // console.log 写入会抛 EIO，必须吞掉，否则主进程未捕获异常直接崩溃弹窗。
+  try { process.stdout.write(`[CONTRACT-AMS] ${msg}\n`) } catch (_) {}
+}
+const OS_INFO = `${process.platform} ${process.arch} ${require('os').release()}`
+appLog(`=== 启动 === 版本 ${require(path.join(ROOT, 'package.json')).version} | 系统 ${OS_INFO} | 软件渲染 ${process.env.CONTRACTAMS_SOFTWARE_RENDER === '1' ? '开' : '关'}`)
+// Win7/8 检测（Electron 33 不支持；提示用户用兼容版）
+if (process.platform === 'win32' && /^(6\.1|6\.2|6\.3)/.test(require('os').release())) {
+  appLog('⚠ 检测到 Windows 7/8，本版本可能不兼容，请使用 Win7 兼容版或安全模式启动')
+}
+
 const db = require(path.join(ROOT, 'packages', 'api-server', 'db'))
 const license = require(path.join(ROOT, 'packages', 'api-server', 'license'))
 const { dispatch, ApiError } = require(path.join(ROOT, 'packages', 'api-server', 'core'))
@@ -37,7 +57,7 @@ function wrap(fn) {
   return async (_e, payload) => {
     try { return { ok: true, data: await fn(payload || {}) } }
     catch (err) {
-      if (!(err instanceof ApiError)) console.error('[CONTRACT-AMS IPC]', err)
+      if (!(err instanceof ApiError)) appLog(`✗ IPC 异常：${err?.stack || err?.message || err}`)
       return { ok: false, error: err.message || '操作失败' }
     }
   }
@@ -126,25 +146,36 @@ function createWindow() {
     },
   })
   Menu.setApplicationMenu(null)
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => { appLog('窗口已渲染显示'); win.show() })
+  // 加载失败诊断（Win10 有进程无窗口的常见原因）
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    appLog(`✗ 页面加载失败：${code} ${desc} ${url}`)
+  })
+  win.webContents.on('render-process-gone', (_e, details) => {
+    appLog(`✗ 渲染进程崩溃：${details?.reason || 'unknown'}`)
+  })
+  // 20 秒仍未渲染则写日志提示（不弹窗，避免卡死无人看到）
+  setTimeout(() => { if (win && !win.isVisible()) appLog('⚠ 窗口 20 秒未显示，可能是 GPU 渲染问题，请尝试安全模式启动') }, 20000)
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
 
   // 默认直接加载本地构建产物：不依赖 Vite，也不依赖局域网服务是否启动
   // 开发调试时设置 CONTRACTAMS_DEV=1 并启动 `npm run dev`，即可加载 Vite 热更新页面
   const dev = process.env.CONTRACTAMS_DEV === '1'
-  if (dev) win.loadURL(DEV_URL)
-  else win.loadFile(DIST_INDEX)
+  if (dev) { appLog('加载开发服务器 ' + DEV_URL); win.loadURL(DEV_URL) }
+  else { appLog('加载本地页面 ' + DIST_INDEX); win.loadFile(DIST_INDEX) }
   applySavedIcon()
 }
 
 app.whenReady().then(async () => {
+  appLog(' Electron 主进程就绪，初始化数据库…')
   await db.init()
+  appLog(' 数据库初始化完成，数据目录：' + db.DATA_DIR)
   // V1.1 定时备份（按设置自动触发）
   require(path.join(ROOT, 'packages', 'api-server', 'backup')).startAutoBackup()
   registerIpc()
   createWindow()
   if (db.getConfig().autoStart) {
-    try { await lan.start() } catch (e) { console.warn('[CONTRACT-AMS] 自动启动服务失败:', e.message) }
+    try { await lan.start() } catch (e) { appLog(`✗ 自动启动服务失败：${e.message}`) }
   }
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })

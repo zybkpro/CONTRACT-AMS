@@ -18,13 +18,13 @@ const READONLY_ALLOWED = ['/api/auth', '/api/bootstrap', '/api/h5/register-payme
 
 const CONTRACT_FIELDS = ['contract_no', 'title', 'direction', 'type', 'status', 'project_id', 'party_id', 'parent_id',
   'our_entity', 'amount', 'currency', 'sign_date', 'start_date', 'end_date', 'auto_renew', 'terminate_note', 'owner', 'remark',
-  'amount_ex_tax', 'tax_amount', 'tax_rate', 'category_id']
+  'amount_ex_tax', 'tax_amount', 'tax_rate', 'category_id', 'text_note']
 const FIELD_LABEL = {
   contract_no: '合同编号', title: '合同名称', direction: '方向', type: '类型', status: '状态',
   project_id: '项目', party_id: '相对方', parent_id: '主合同', our_entity: '我方主体', amount: '金额',
   currency: '币种', sign_date: '签订日', start_date: '开始日', end_date: '结束日',
   auto_renew: '自动续约', terminate_note: '终止条件', owner: '负责人', remark: '备注', archived: '归档',
-  amount_ex_tax: '不含税金额', tax_amount: '税额', tax_rate: '税率', category_id: '费用分类',
+  amount_ex_tax: '不含税金额', tax_amount: '税额', tax_rate: '税率', category_id: '费用分类', text_note: '文字摘录',
 }
 
 /* ==================== 通用辅助 ==================== */
@@ -95,6 +95,7 @@ function validateContract(c, exceptId) {
   if (!['对内', '对外'].includes(c.direction)) return '方向须为 对内/对外'
   if (!c.type) return '合同类型不能为空'
   if (!c.party_id || !db.one('SELECT id FROM party WHERE id=?', [c.party_id])) return '请选择有效的相对方（需先在相对方档案创建）'
+  if (['项目收款合同', '项目支付合同'].includes(c.type) && !c.project_id) return `${c.type}必须选择所属项目`
   if (c.project_id && !db.one('SELECT id FROM project WHERE id=?', [c.project_id])) return '关联项目不存在'
   if (c.parent_id) {
     if (c.parent_id === exceptId) return '合同不能关联自身为主合同'
@@ -326,7 +327,7 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
 
   // ---------- 基础 ----------
   if (p === '/api/health' && method === 'GET')
-    return { status: 200, data: { service: 'CONTRACT-AMS', time: db.now(), contracts: db.one('SELECT COUNT(*) AS n FROM contract').n } }
+    return { status: 200, data: { service: 'CONTRACT-AMS', time: db.now(), contracts: db.one('SELECT COUNT(*) AS n FROM contract WHERE deleted_at IS NULL').n } }
   if (p === '/api/bootstrap' && method === 'GET') {
     const data = db.bootstrap()
     // 数据范围：项目经理仅看其负责项目（负责人由登录账号的 owner_name 决定）
@@ -349,10 +350,29 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     if (body.withData) r.base64 = fs.readFileSync(r.file).toString('base64')
     return { status: 200, data: r }
   }
+  // V1.2：从备份 zip 恢复（前端选文件读成 base64 上传，桌面/H5 通用）
+  if (p === '/api/backup/restore' && method === 'POST') {
+    if (role !== 'admin') throw new ApiError(403, '仅管理员可恢复备份')
+    const backup = require('./backup')
+    const b64 = String(body.base64 || '')
+    if (!b64) throw new ApiError(400, '请选择备份文件')
+    let bytes
+    try { bytes = Buffer.from(b64, 'base64') } catch (_) { throw new ApiError(400, '备份文件读取失败') }
+    if (bytes.length < 100) throw new ApiError(400, '备份文件损坏或为空')
+    const tmp = path.join(db.DATA_DIR, `restore_upload_${Date.now()}.zip`)
+    fs.mkdirSync(db.DATA_DIR, { recursive: true })
+    fs.writeFileSync(tmp, bytes)
+    try {
+      const r = backup.restoreFromZip(tmp, { keepAccounts: body.keepAccounts !== false })
+      return { status: 200, data: r }
+    } finally {
+      try { fs.unlinkSync(tmp) } catch (_) {}
+    }
+  }
   if (p === '/api/next-code' && method === 'GET')
     return { status: 200, data: { code: db.nextCode(query.get('direction') || '对外') } }
   if (p === '/api/dashboard' && method === 'GET') {
-    let list = db.all('SELECT * FROM contract')
+    let list = db.all('SELECT * FROM contract WHERE deleted_at IS NULL')
     if (role === 'pm') {
       const owned = db.all('SELECT id FROM project WHERE owner=?', [currentUser?.owner_name || ''])
       const ids = new Set(owned.map((x) => x.id))
@@ -452,7 +472,7 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
 
   // ---------- 合同台账 ----------
   if (p === '/api/contracts' && method === 'GET') {
-    let list = db.all('SELECT * FROM contract ORDER BY created_at DESC, rowid DESC')
+    let list = db.all('SELECT * FROM contract WHERE deleted_at IS NULL ORDER BY created_at DESC, rowid DESC')
     if (role === 'pm') {
       const owned = db.all('SELECT id FROM project WHERE owner=?', [currentUser?.owner_name || ''])
       const ids = new Set(owned.map((x) => x.id))
@@ -477,11 +497,11 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     const pt = db.one('SELECT blacklist FROM party WHERE id=?', [c.party_id])
     if (pt && pt.blacklist && body.confirmBlacklist !== true) throw new ApiError(400, '该相对方在黑名单中，请显式确认后创建（confirmBlacklist=true）')
     db.mutate(() => {
-      db.run(`INSERT INTO contract (id,contract_no,title,direction,type,status,project_id,party_id,parent_id,our_entity,amount,currency,sign_date,start_date,end_date,auto_renew,terminate_note,owner,archived,remark,created_at,updated_at,amount_ex_tax,tax_amount,tax_rate,category_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      db.run(`INSERT INTO contract (id,contract_no,title,direction,type,status,project_id,party_id,parent_id,our_entity,amount,currency,sign_date,start_date,end_date,auto_renew,terminate_note,owner,archived,remark,created_at,updated_at,amount_ex_tax,tax_amount,tax_rate,category_id,text_note)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [c.id, c.contract_no, c.title, c.direction, c.type, c.status, c.project_id, c.party_id, c.parent_id,
           c.our_entity, c.amount, c.currency, c.sign_date, c.start_date, c.end_date, c.auto_renew, c.terminate_note,
-          c.owner, 0, c.remark, c.created_at, c.updated_at, c.amount_ex_tax, c.tax_amount, c.tax_rate, c.category_id])
+          c.owner, 0, c.remark, c.created_at, c.updated_at, c.amount_ex_tax, c.tax_amount, c.tax_rate, c.category_id, c.text_note || ''])
       db.addLog({ contract_id: c.id, contract_no: c.contract_no, event_type: '创建', content: `新增合同【${c.contract_no}】${c.title}${c.parent_id ? '（补充协议）' : ''}`, operator: body.operator || c.owner || '商务', source: ctx.source || 'desktop' })
     })
     return { status: 200, data: contractView(findContract(c.id)) }
@@ -490,6 +510,8 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
   if (ctMatch) {
     const id = ctMatch[1]
     const old = findContract(id)
+    // 软删除的合同不在台账显示；详情/编辑也拒绝，需先从回收站恢复
+    if (old.deleted_at && method !== 'DELETE') throw new ApiError(404, '合同已在回收站，请先恢复后再操作')
     if (method === 'GET') {
       db.addLog({ contract_id: id, contract_no: old.contract_no, event_type: '查看', content: `打开合同【${old.contract_no}】详情`, operator: currentUser?.name || '访客', source: ctx.source || 'desktop' })
       return { status: 200, data: contractView(old) }
@@ -501,29 +523,71 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
       const err = validateContract(next, id)
       if (err) throw new ApiError(400, err)
       db.mutate(() => {
-        db.run(`UPDATE contract SET contract_no=?,title=?,direction=?,type=?,status=?,project_id=?,party_id=?,parent_id=?,our_entity=?,amount=?,currency=?,sign_date=?,start_date=?,end_date=?,auto_renew=?,terminate_note=?,owner=?,remark=?,updated_at=?,amount_ex_tax=?,tax_amount=?,tax_rate=?,category_id=? WHERE id=?`,
+        db.run(`UPDATE contract SET contract_no=?,title=?,direction=?,type=?,status=?,project_id=?,party_id=?,parent_id=?,our_entity=?,amount=?,currency=?,sign_date=?,start_date=?,end_date=?,auto_renew=?,terminate_note=?,owner=?,remark=?,updated_at=?,amount_ex_tax=?,tax_amount=?,tax_rate=?,category_id=?,text_note=? WHERE id=?`,
           [next.contract_no, next.title, next.direction, next.type, next.status, next.project_id, next.party_id, next.parent_id,
             next.our_entity, next.amount, next.currency, next.sign_date, next.start_date, next.end_date, next.auto_renew,
-            next.terminate_note, next.owner, next.remark, next.updated_at, next.amount_ex_tax, next.tax_amount, next.tax_rate, next.category_id, id])
+            next.terminate_note, next.owner, next.remark, next.updated_at, next.amount_ex_tax, next.tax_amount, next.tax_rate, next.category_id, next.text_note || '', id])
         diffContractLogs(old, next, body.operator || next.owner || '商务', ctx.source || 'desktop')
       })
       return { status: 200, data: contractView(findContract(id)) }
     }
     if (method === 'DELETE') {
-      if (db.one('SELECT COUNT(*) AS n FROM contract WHERE parent_id=?', [id]).n > 0)
-        throw new ApiError(400, '该合同存在补充协议，请先处理子合同')
+      if (old.deleted_at) throw new ApiError(400, '该合同已在回收站中')
       if (body.password && body.password !== db.getSettings().deletePassword && db.getSettings().deletePassword)
         throw new ApiError(403, '删除口令不正确')
+      // V1.2：软删除——附件与关联记录原地保留，仅标记 deleted_at，进入回收站
       db.mutate(() => {
-        // 删除关联文件
-        for (const f of db.all('SELECT file_path FROM contract_file WHERE contract_id=?', [id])) db.removeMediaFile(f.file_path)
-        for (const t of ['contract_file', 'milestone', 'payment_plan', 'payment_record', 'approval_log']) db.run(`DELETE FROM ${t} WHERE contract_id=?`, [id])
-        db.run('DELETE FROM contract WHERE id=?', [id])
-        db.addLog({ contract_id: '', contract_no: old.contract_no, event_type: '删除', content: `合同【${old.contract_no}】${old.title} 已永久删除`, operator: body.operator || '管理员', source: ctx.source || 'desktop' })
+        db.run('UPDATE contract SET deleted_at=?, updated_at=? WHERE id=?', [db.now(), db.now(), id])
+        db.addLog({ contract_id: id, contract_no: old.contract_no, event_type: '删除', content: `合同【${old.contract_no}】${old.title} 已移入回收站（附件保留，可在回收站恢复）`, operator: body.operator || '管理员', source: ctx.source || 'desktop' })
       })
-      return { status: 200, data: { id } }
+      return { status: 200, data: { id, recycled: true } }
     }
   }
+  // ---------- 回收站（V1.2 软删除） ----------
+  if (p === '/api/recycle' && method === 'GET') {
+    if (role !== 'admin') throw new ApiError(403, '仅管理员可查看回收站')
+    const list = db.all('SELECT id,contract_no,title,deleted_at,type,direction,amount FROM contract WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC')
+    const out = list.map((c) => ({ ...c, fileCount: db.one('SELECT COUNT(*) AS n FROM contract_file WHERE contract_id=?', [c.id]).n }))
+    const keepDays = Number(db.getSettings().recycleKeepDays ?? 30)
+    return { status: 200, data: { list: out, keepDays } }
+  }
+  const recycleAction = /^\/api\/recycle\/([^/]+)\/(restore|purge)$/.exec(p)
+  if (recycleAction && method === 'POST') {
+    if (role !== 'admin') throw new ApiError(403, '仅管理员可操作回收站')
+    const id = recycleAction[1], action = recycleAction[2]
+    const c = db.one('SELECT * FROM contract WHERE id=? AND deleted_at IS NOT NULL', [id])
+    if (!c) throw new ApiError(404, '回收站中不存在该合同')
+    if (action === 'restore') {
+      db.mutate(() => {
+        db.run('UPDATE contract SET deleted_at=NULL, updated_at=? WHERE id=?', [db.now(), id])
+        db.addLog({ contract_id: id, contract_no: c.contract_no, event_type: '恢复', content: `合同【${c.contract_no}】从回收站恢复`, operator: currentUser?.name || '管理员', source: ctx.source || 'desktop' })
+      })
+      return { status: 200, data: { id, restored: true } }
+    }
+    // purge：彻底删除（真删文件与记录）
+    db.mutate(() => {
+      for (const f of db.all('SELECT file_path FROM contract_file WHERE contract_id=?', [id])) db.removeMediaFile(f.file_path)
+      for (const t of ['contract_file', 'milestone', 'payment_plan', 'payment_record', 'approval_log']) db.run(`DELETE FROM ${t} WHERE contract_id=?`, [id])
+      db.run('DELETE FROM contract WHERE id=?', [id])
+      db.addLog({ contract_id: '', contract_no: c.contract_no, event_type: '彻底删除', content: `合同【${c.contract_no}】从回收站彻底删除，附件已移除`, operator: currentUser?.name || '管理员', source: ctx.source || 'desktop' })
+    })
+    return { status: 200, data: { id, purged: true } }
+  }
+  if (p === '/api/recycle/empty' && method === 'POST') {
+    if (role !== 'admin') throw new ApiError(403, '仅管理员可操作回收站')
+    const list = db.all('SELECT id FROM contract WHERE deleted_at IS NOT NULL')
+    let n = 0
+    for (const c of list) {
+      for (const f of db.all('SELECT file_path FROM contract_file WHERE contract_id=?', [c.id])) db.removeMediaFile(f.file_path)
+      for (const t of ['contract_file', 'milestone', 'payment_plan', 'payment_record', 'approval_log']) db.run(`DELETE FROM ${t} WHERE contract_id=?`, [c.id])
+      db.run('DELETE FROM contract WHERE id=?', [c.id])
+      n++
+    }
+    db.persist()
+    db.addLog({ event_type: '清空回收站', content: `清空回收站，彻底删除 ${n} 份合同及其附件`, operator: currentUser?.name || '管理员', source: ctx.source || 'desktop' })
+    return { status: 200, data: { purged: n } }
+  }
+
   const ctAction = /^\/api\/contracts\/([^/]+)\/(status|archive|unarchive)$/.exec(p)
   if (ctAction && method === 'POST') {
     const id = ctAction[1], action = ctAction[2]
@@ -829,7 +893,7 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     let list = db.all('SELECT i.*, c.contract_no, c.title AS contract_title FROM invoice i LEFT JOIN contract c ON c.id=i.contract_id ORDER BY i.invoice_date DESC, i.created_at DESC')
     if (role === 'pm') {
       const owned = db.all('SELECT id FROM project WHERE owner=?', [currentUser?.owner_name || '']).map((x) => x.id)
-      const cids = new Set(db.all('SELECT id, project_id FROM contract').filter((c) => owned.includes(c.project_id)).map((c) => c.id))
+      const cids = new Set(db.all('SELECT id, project_id FROM contract WHERE deleted_at IS NULL').filter((c) => owned.includes(c.project_id)).map((c) => c.id))
       list = list.filter((i) => cids.has(i.contract_id))
     }
     if (query.get('contractId')) list = list.filter((i) => i.contract_id === query.get('contractId'))
@@ -942,15 +1006,18 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
 
   // ---------- 统计（按项目 / 相对方） ----------
   if (p === '/api/stats/by-project' && method === 'GET') {
-    const list = db.all('SELECT * FROM contract')
+    const list = db.all('SELECT * FROM contract WHERE deleted_at IS NULL')
     const out = db.all('SELECT * FROM project').map((pr) => {
       const cs = list.filter((c) => c.project_id === pr.id)
-      return { ...pr, contractCount: cs.length, amount: cs.reduce((s, c) => s + Number(c.amount || 0), 0) }
+      const receiveAmount = cs.filter((c) => c.type === '项目收款合同').reduce((s, c) => s + Number(c.amount || 0), 0)
+      const payAmount = cs.filter((c) => c.type === '项目支付合同').reduce((s, c) => s + Number(c.amount || 0), 0)
+      return { ...pr, contractCount: cs.length, amount: cs.reduce((s, c) => s + Number(c.amount || 0), 0),
+        receiveAmount, payAmount, netAmount: Math.round((receiveAmount - payAmount) * 100) / 100 }
     })
     return { status: 200, data: { list: out } }
   }
   if (p === '/api/stats/by-party' && method === 'GET') {
-    const list = db.all('SELECT * FROM contract')
+    const list = db.all('SELECT * FROM contract WHERE deleted_at IS NULL')
     const out = db.all('SELECT * FROM party').map((pt) => {
       const cs = list.filter((c) => c.party_id === pt.id)
       return { ...pt, contractCount: cs.length, amount: cs.reduce((s, c) => s + Number(c.amount || 0), 0) }

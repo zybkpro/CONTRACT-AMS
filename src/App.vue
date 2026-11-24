@@ -19,6 +19,7 @@ import ImportDialog from './components/ImportDialog.vue'
 import InvoicePanel from './components/InvoicePanel.vue'
 import ForceChangePassword from './components/ForceChangePassword.vue'
 import ActivationDialog from './components/ActivationDialog.vue'
+import RecycleBin from './components/RecycleBin.vue'
 
 const contracts = ref([]), projects = ref([]), parties = ref([])
 const dictTypes = ref([]), dictCategories = ref([]), settings = ref({}), dashboard = ref(null)
@@ -36,6 +37,7 @@ function toggleGroup(pid) {
 }
 const selectedId = ref('')
 const dialog = ref(null)
+const showRecycle = ref(false) // 回收站弹窗
 const detail = ref(null)
 const clock = ref('')
 const currentUser = ref(getCurrentUser())
@@ -400,6 +402,7 @@ async function onDataCleared() {
           <button class="btn" @click="doExport">导出</button>
           <button class="btn" @click="doExportPayments">收付款导出</button>
           <button class="btn" @click="doExportLogs">日志导出</button>
+          <button v-if="isAdmin" class="btn" @click="showRecycle = true">回收站</button>
           <span class="divider"></span>
           <label class="field-inline">方向<select v-model="direction"><option>全部</option><option v-for="d in DIRECTIONS" :key="d">{{ d }}</option></select></label>
           <label class="field-inline">状态<select v-model="status"><option>全部</option><option v-for="s in STATUSES" :key="s">{{ s }}</option></select></label>
@@ -493,8 +496,8 @@ async function onDataCleared() {
       :role="role" @saved="onSettingsSaved" @cleared="onDataCleared" @close="dialog = null" />
     <ImportDialog v-if="dialog?.name === 'import'" @imported="load" @close="dialog = null" />
     <ConfirmDialog v-if="dialog?.name === 'delete'" title="删除合同" danger
-      :message="`确定永久删除【${dialog.payload.row.contract_no}】${dialog.payload.row.title}？关联文件与流水将一并删除，不可恢复。`"
-      confirm-text="确认删除" @cancel="dialog = null" @confirm="confirmDelete" />
+      :message="`确定删除【${dialog.payload.row.contract_no}】${dialog.payload.row.title}？合同将移入回收站，附件文件保留、30 天内可原样恢复；只有「彻底删除」才会移除附件。`"
+      confirm-text="移入回收站" @cancel="dialog = null" @confirm="confirmDelete" />
     <ConfirmDialog v-if="dialog?.name === 'status'" :title="`流转为「${dialog.payload.status}」`"
       :message="`确定将【${dialog.payload.row.contract_no}】流转为「${dialog.payload.status}」？该变更将写入生命周期日志。`"
       confirm-text="确认" @cancel="dialog = null" @confirm="confirmStatus" />
@@ -503,6 +506,7 @@ async function onDataCleared() {
       @confirm="doArchive(dialog.payload.row, 'archive')" />
 
     </template>
+    <RecycleBin v-if="showRecycle" @close="showRecycle = false" @restored="load" />
     <ToastStack />
   </div>
 </template>

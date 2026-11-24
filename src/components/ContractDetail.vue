@@ -41,6 +41,17 @@ const canEdit = computed(() => props.role === 'admin' || props.role === 'biz')
 const canFinance = computed(() => props.role === 'admin' || props.role === 'biz' || props.role === 'finance')
 const canApprove = computed(() => props.role === 'admin' || props.role === 'biz')
 
+// V1.2 收付款体验：流水按日期倒序；期次差额；快速登记带入期次
+const sortedRecords = computed(() => [...(props.contract?.payment_records || [])].sort((a, b) => String(b.pay_date || '').localeCompare(String(a.pay_date || ''))))
+function planReceived(pp) { return (props.contract?.payment_records || []).filter((r) => r.plan_id === pp.id).reduce((s, r) => s + Number(r.amount || 0), 0) }
+function planDiff(pp) { return Math.round((Number(pp.plan_amount || 0) - planReceived(pp)) * 100) / 100 }
+function quickPay(pp) {
+  prForm.value.plan_id = pp.id
+  prForm.value.amount = Math.max(0, planDiff(pp))
+  prForm.value.direction = pp.direction
+  document.querySelector('.pay-quick-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
 watch(() => props.contract?.id, () => { tab.value = 'base' })
 
 function dueInfo() {
@@ -90,6 +101,11 @@ async function openFile(f, download = false) {
     api.logFileView({ fileId: f.id, action: download ? 'download' : 'view', operator: props.role })
   } catch (e) { toast(`文件操作失败：${e.message}`, 'error') }
 }
+
+// V1.2：图片附件缩略图与放大预览
+const imagePreview = ref(null)
+function isImageFile(f) { return /\.(jpe?g|png|gif|webp|bmp)$/i.test(f?.file_name || '') }
+function previewImage(f) { imagePreview.value = { name: f.file_name, url: mediaUrl(f.file_path) } }
 
 /* ---------- 履约节点 ---------- */
 async function addMilestone() {
@@ -192,6 +208,7 @@ async function doApprove() {
           <div><label>自动续约</label><div>{{ contract.auto_renew ? '是' : '否' }}</div></div>
           <div><label>终止条件</label><div>{{ contract.terminate_note || '—' }}</div></div>
           <div class="full"><label>相对方</label><div>{{ contract.party_name }}</div></div>
+          <div class="full"><label>文字摘录 / 条款速记</label><div style="white-space:pre-wrap">{{ contract.text_note || '—' }}</div></div>
           <div class="full"><label>备注</label><div>{{ contract.remark || '—' }}</div></div>
           <div v-if="contract.children?.length" class="full"><label>补充协议</label>
             <div><span v-for="c in contract.children" :key="c.id" class="tag-cell tag-blue" style="margin-right:6px">{{ c.contract_no }} {{ c.title }}</span></div>
@@ -210,13 +227,17 @@ async function doApprove() {
             <thead><tr><th>文件</th><th>版本</th><th>正文</th><th>变更说明</th><th>大小</th><th>上传人</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="f in contract.files" :key="f.id">
-                <td>{{ f.file_name }}</td>
+                <td>
+                  <img v-if="isImageFile(f)" :src="mediaUrl(f.file_path)" class="file-thumb" @click="previewImage(f)" :title="f.file_name" />
+                  {{ f.file_name }}
+                </td>
                 <td>v{{ f.version }}</td>
                 <td><span v-if="f.is_main" class="tag-cell tag-cyan">正文</span><span v-else class="muted">附件</span></td>
                 <td>{{ f.change_note || '—' }}</td>
                 <td>{{ f.size >= 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB' }}</td>
                 <td>{{ f.uploaded_by }}</td>
                 <td>
+                  <button v-if="isImageFile(f)" class="mini-btn" @click="previewImage(f)">看图</button>
                   <button class="mini-btn" @click="openFile(f, false)">预览</button>
                   <button class="mini-btn" @click="openFile(f, true)">下载</button>
                   <button v-if="canEdit && !contract.archived" class="mini-btn danger" @click="api.deleteFile(f.id).then(refreshDetail).catch(e=>toast(e.message,'error'))">删除</button>
@@ -261,7 +282,7 @@ async function doApprove() {
             <div><label>计划应付</label><b>¥{{ formatMoney(contract.summary?.planOut) }}</b></div>
             <div><label>已付</label><b class="green">¥{{ formatMoney(contract.summary?.paid) }}</b></div>
             <div><label>未付</label><b class="amber">¥{{ formatMoney(contract.summary?.remainOut) }}</b></div>
-            <div><label>回款率</label><b>{{ contract.summary?.planIn ? Math.round(contract.summary.received / contract.summary.planIn * 100) : 0 }}%</b></div>
+            <div title="回款率 = 合同款性质的已收 ÷ 合同款性质的计划应收；违约金、罚息等不计入"><label>回款率 ⓘ</label><b>{{ contract.summary?.planIn ? Math.round(contract.summary.received / contract.summary.planIn * 100) : 0 }}%</b></div>
           </div>
           <h4>收付款计划</h4>
           <div v-if="canEdit" class="inline-form">
@@ -280,19 +301,23 @@ async function doApprove() {
             <span class="muted" style="font-size:11px">已有计划会提示覆盖</span>
           </div>
           <table class="mini-table">
-            <thead><tr><th>方向</th><th>期次</th><th>性质</th><th>计划金额</th><th>计划日期</th><th>状态</th><th>到账合计</th><th></th></tr></thead>
+            <thead><tr><th>方向</th><th>期次</th><th>性质</th><th>计划金额</th><th>计划日期</th><th>状态</th><th>到账合计</th><th>差额</th><th></th></tr></thead>
             <tbody>
               <tr v-for="pp in contract.payment_plans" :key="pp.id">
                 <td>{{ pp.direction }}</td><td>{{ pp.seq }}</td><td>{{ natureLabel(pp.nature) }}</td>
                 <td>¥{{ formatMoney(pp.plan_amount) }}</td>
                 <td>{{ pp.plan_date }}</td><td><span class="tag-cell tag-gray">{{ pp.status }}</span></td>
-                <td>¥{{ formatMoney((contract.payment_records || []).filter(r => r.plan_id === pp.id).reduce((s,r)=>s+Number(r.amount||0),0)) }}</td>
-                <td><button v-if="canEdit" class="mini-btn danger" @click="delPlan(pp.id)">✕</button></td>
+                <td>¥{{ formatMoney(planReceived(pp)) }}</td>
+                <td><b :class="planDiff(pp) > 0 ? 'amber' : 'green'">¥{{ formatMoney(planDiff(pp)) }}</b></td>
+                <td>
+                  <button v-if="canFinance" class="mini-btn" @click="quickPay(pp)">快速登记</button>
+                  <button v-if="canEdit" class="mini-btn danger" @click="delPlan(pp.id)">✕</button>
+                </td>
               </tr>
             </tbody>
           </table>
           <h4>实际流水</h4>
-          <div v-if="canFinance" class="inline-form">
+          <div v-if="canFinance" class="inline-form pay-quick-anchor">
             <select v-model="prForm.plan_id"><option value="">— 计划外 —</option><option v-for="pp in contract.payment_plans" :key="pp.id" :value="pp.id">{{ pp.seq }} · {{ pp.direction }}</option></select>
             <input v-model.number="prForm.amount" type="number" class="inline-input short" placeholder="金额" />
             <input v-model="prForm.pay_date" type="date" />
@@ -303,7 +328,7 @@ async function doApprove() {
           <table class="mini-table">
             <thead><tr><th>日期</th><th>金额</th><th>性质</th><th>方式</th><th>关联期次</th><th>备注</th><th></th></tr></thead>
             <tbody>
-              <tr v-for="pr in contract.payment_records" :key="pr.id">
+              <tr v-for="pr in sortedRecords" :key="pr.id">
                 <td>{{ pr.pay_date }}</td><td>¥{{ formatMoney(pr.amount) }}</td>
                 <td><span class="tag-cell" :class="pr.nature === 'contract' ? 'tag-gray' : 'tag-amber'">{{ natureLabel(pr.nature) }}</span></td>
                 <td>{{ pr.method }}</td>
@@ -353,10 +378,22 @@ async function doApprove() {
         <button v-if="role === 'admin' && contract.archived" class="btn" @click="api.archive(contract.id,'unarchive').then(refreshDetail).catch(e=>toast(e.message,'error'))">解档</button>
       </div>
     </div>
+    <!-- V1.2 图片放大预览 -->
+    <div v-if="imagePreview" class="img-preview-mask" @click.self="imagePreview = null">
+      <div class="img-preview-box">
+        <div class="img-preview-head"><span>{{ imagePreview.name }}</span><button class="icon-btn" @click="imagePreview = null">✕</button></div>
+        <img :src="imagePreview.url" :alt="imagePreview.name" />
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .money { color: #3fd3ff; font-weight: 600; }
 .green { color: #3ce0a5; } .amber { color: #ffbe4d; }
+.file-thumb { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; cursor: zoom-in; margin-right: 6px; vertical-align: middle; border: 1px solid var(--line); }
+.img-preview-mask { position: fixed; inset: 0; z-index: 400; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; padding: 30px; }
+.img-preview-box { max-width: 94vw; max-height: 94vh; display: flex; flex-direction: column; }
+.img-preview-head { display: flex; align-items: center; justify-content: space-between; color: #fff; margin-bottom: 10px; }
+.img-preview-box img { max-width: 94vw; max-height: 86vh; object-fit: contain; }
 </style>

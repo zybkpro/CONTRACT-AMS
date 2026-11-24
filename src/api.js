@@ -131,6 +131,11 @@ export const api = {
   deleteDictCategory: (id) => request(`/api/dict-categories/${id}`, body('DELETE')),
   saveSettings: (settings) => request('/api/settings', body('PUT', settings)),
   runBackup: (dir, withData = false) => request('/api/backup/run', body('POST', { dir, withData })),
+  restoreBackup: (base64, keepAccounts = true) => request('/api/backup/restore', body('POST', { base64, keepAccounts })),
+  recycleList: () => request('/api/recycle'),
+  recycleRestore: (id) => request(`/api/recycle/${encodeURIComponent(id)}/restore`, body('POST')),
+  recyclePurge: (id) => request(`/api/recycle/${encodeURIComponent(id)}/purge`, body('POST')),
+  recycleEmpty: () => request('/api/recycle/empty', body('POST')),
   clearData: () => request('/api/data/clear', body('POST', { confirm: 'CLEAR' })),
   importContracts: (rows) => request('/api/import', body('POST', { rows })),
 

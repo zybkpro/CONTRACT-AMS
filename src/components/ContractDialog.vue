@@ -27,21 +27,48 @@ const typesForDirection = computed(() => {
   return list.length ? list.map((d) => d.name) : ['销售', '采购', '框架协议', '保密', '外包', '补充协议']
 })
 
+// V1.2 草稿保护：录入中意外关闭不丢数据
+const draftKey = isEdit.value ? `contractams-draft-${props.model.id}` : 'contractams-draft-new'
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(draftKey)
+    if (!raw) return null
+    const d = JSON.parse(raw)
+    if (d?.ts && Date.now() - d.ts > 7 * 24 * 3600 * 1000) { localStorage.removeItem(draftKey); return null }
+    return d.form || null
+  } catch (_) { return null }
+}
+function saveDraft() {
+  try { localStorage.setItem(draftKey, JSON.stringify({ ts: Date.now(), form: form.value })) } catch (_) {}
+}
+function clearDraft() { try { localStorage.removeItem(draftKey) } catch (_) {} }
+
 function reset() {
-  form.value = props.model ? { ...props.model } : {
+  const draft = loadDraft()
+  form.value = draft || (props.model ? { ...props.model } : {
     contract_no: '', title: '', direction: '对外', type: '销售', status: '草稿',
     project_id: '', party_id: '', parent_id: '', our_entity: '', amount: 0, currency: 'CNY',
     sign_date: today(), start_date: '', end_date: '', auto_renew: false, terminate_note: '', owner: '', remark: '',
-    amount_ex_tax: 0, tax_amount: 0, tax_rate: 0, category_id: '',
-  }
+    amount_ex_tax: 0, tax_amount: 0, tax_rate: 0, category_id: '', text_note: '',
+  })
+  if (draft) toast('已恢复上次未保存的草稿', 'info')
   err.value = ''
   confirmBlacklist.value = false
-  if (!isEdit.value && !isSupplement.value) {
+  if (!draft && !isEdit.value && !isSupplement.value) {
     api.nextCode(form.value.direction).then((r) => { if (!form.value.contract_no) form.value.contract_no = r.code }).catch(() => {})
   }
 }
 reset()
 watch(() => props.model, reset)
+// 表单变化自动存草稿（跳过首次 reset 触发）
+watch(form, (v) => { if (v && Object.keys(v).length) saveDraft() }, { deep: true })
+
+function requestClose() {
+  // 有实质内容时确认，避免误点丢失
+  const hasContent = (form.value.title || '').trim() || form.value.party_id || Number(form.value.amount) > 0
+  if (hasContent && !window.confirm('有未保存的内容。关闭后草稿会保留，下次打开可自动恢复。确定关闭吗？')) return
+  emit('close')
+}
 
 watch(() => form.value.direction, (d) => {
   if (!typesForDirection.value.includes(form.value.type)) form.value.type = typesForDirection.value[0] || '销售'
@@ -74,6 +101,7 @@ async function save() {
   try {
     const payload = { ...form.value, confirmBlacklist: confirmBlacklist.value }
     const saved = isEdit.value ? await api.updateContract(props.model.id, payload) : await api.createContract(payload)
+    clearDraft()
     toast(isEdit.value ? '合同已更新' : '合同已创建', 'success')
     emit('saved', saved)
   } catch (e) {
@@ -84,11 +112,11 @@ async function save() {
 </script>
 
 <template>
-  <div class="modal-mask" @click.self="emit('close')">
+  <div class="modal-mask">
     <div class="modal modal-lg">
       <div class="modal-head">
         <h3>{{ isEdit ? '编辑合同' : (isSupplement ? '创建补充协议' : '新增合同') }}</h3>
-        <button class="icon-btn" @click="emit('close')">✕</button>
+        <button class="icon-btn" @click="requestClose">✕</button>
       </div>
       <div class="modal-body form-grid">
         <label class="field"><span>合同编号 <i>*</i></span><input v-model="form.contract_no" :placeholder="isSupplement ? '留空自动生成（原编号-n）' : '留空自动生成'" /></label>
@@ -126,13 +154,14 @@ async function save() {
         </label>
         <label class="field checkbox-field"><span>自动续约</span><input v-model="form.auto_renew" type="checkbox" /></label>
         <label class="field full"><span>终止条件备注</span><input v-model="form.terminate_note" placeholder="如：提前30天书面通知可终止" /></label>
+        <label class="field full"><span>文字摘录 / 条款速记</span><textarea v-model="form.text_note" rows="3" placeholder="录入纸质合同的关键条款、编号、重要约定等文字内容" /></label>
         <label class="field full"><span>备注</span><textarea v-model="form.remark" rows="2" /></label>
         <div v-if="err" class="form-error full">{{ err }}
           <button v-if="confirmBlacklist === false && err.includes('黑名单')" class="link-btn" @click="save">仍要创建（确认黑名单）</button>
         </div>
       </div>
       <div class="modal-foot">
-        <button class="btn ghost" @click="emit('close')">取消</button>
+        <button class="btn ghost" @click="requestClose">取消</button>
         <button class="btn primary" :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存' }}</button>
       </div>
     </div>

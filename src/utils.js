@@ -45,6 +45,7 @@ export const LIST_COLUMNS = [
   { key: 'sign_date', label: '签订日', width: 104 },
   { key: 'end_date', label: '到期日', width: 104 },
   { key: 'owner', label: '负责人', width: 86 },
+  { key: 'text_note', label: '文字摘录', width: 200 },
 ]
 export const CONFIGURABLE_COLUMNS = LIST_COLUMNS
 

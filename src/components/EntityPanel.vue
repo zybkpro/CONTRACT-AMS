@@ -73,6 +73,11 @@ function contractsOf(x) {
         <div class="ec-stats">
           <div><label>关联合同</label><b>{{ stat(x.id).contractCount || 0 }} 份</b></div>
           <div><label>合同金额</label><b>¥{{ formatMoney(stat(x.id).amount) }}</b></div>
+          <template v-if="mode === 'project'">
+            <div><label>收款合同</label><b class="green">¥{{ formatMoney(stat(x.id).receiveAmount) }}</b></div>
+            <div><label>支付合同</label><b class="red">¥{{ formatMoney(stat(x.id).payAmount) }}</b></div>
+            <div><label>净额</label><b>¥{{ formatMoney(stat(x.id).netAmount) }}</b></div>
+          </template>
         </div>
         <div v-if="mode === 'party'" class="ec-fields">
           <div>联系人 {{ x.contact || '—' }} · {{ mask ? maskValue(x.phone, 4) : x.phone }}</div>

@@ -21,3 +21,6 @@ data-test/trial.json
 data-test/license.json
 data-test/media/*
 !data-test/media/.gitkeep
+data-test/backups/
+data-test/bk-test/
+data-test-proj/

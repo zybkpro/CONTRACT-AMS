@@ -89,6 +89,41 @@ async function manualBackup() {
     toast(`已导出：${a.download}`, 'success')
   } catch (e) { toast(e.message, 'error') } finally { busy.value = false }
 }
+// 从备份恢复（V1.2）
+const restoreDialog = ref(false)
+const restoreFile = ref(null)
+const restorePhrase = ref('')
+const restoring = ref(false)
+function openRestoreDialog() {
+  restoreFile.value = null
+  restorePhrase.value = ''
+  restoreDialog.value = true
+}
+async function doRestore() {
+  if (!restoreFile.value) { toast('请先选择备份 zip 文件', 'error'); return }
+  if (restorePhrase.value !== '恢复') { toast('请输入"恢复"确认', 'error'); return }
+  restoring.value = true
+  try {
+    const b64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+      reader.onerror = () => reject(new Error('读取文件失败'))
+      reader.readAsDataURL(restoreFile.value)
+    })
+    const r = await api.restoreBackup(b64, true)
+    restoreDialog.value = false
+    toast(r.message || '恢复完成', 'success')
+    emit('saved', { restored: true })
+  } catch (e) { toast(e.message, 'error') }
+  finally { restoring.value = false }
+}
+function hasUnsaved() {
+  try { return JSON.stringify(cfg) !== JSON.stringify(props.settings) } catch (_) { return false }
+}
+function requestClose() {
+  if (hasUnsaved() && !window.confirm('有未保存的修改。关闭后将丢失这些修改，确定关闭吗？')) return
+  emit('close')
+}
 function openClearDialog() {
   clearAgree.value = false
   clearPhrase.value = ''
@@ -122,9 +157,9 @@ function toggleRemind(d) {
 </script>
 
 <template>
-  <div class="modal-mask" @click.self="emit('close')">
+  <div class="modal-mask">
     <div class="modal modal-lg modal-settings">
-      <div class="modal-head"><h3>系统设置</h3><button class="icon-btn" @click="emit('close')">✕</button></div>
+      <div class="modal-head"><h3>系统设置</h3><button class="icon-btn" @click="requestClose">✕</button></div>
       <div class="settings-layout">
         <div class="settings-nav">
           <button v-for="t in [
@@ -224,8 +259,11 @@ function toggleRemind(d) {
           </div>
           <div v-else-if="tab === 'data'" class="setting-section">
             <h4>数据管理</h4>
-            <p class="hint">备份会导出数据库与全部附件为 zip；清空仅删除业务数据，保留账号与系统设置，且不可恢复。</p>
-            <button class="btn sm" :disabled="busy" @click="manualBackup">{{ busy ? '备份中…' : '备份' }}</button>
+            <p class="hint">备份会导出数据库与全部附件为 zip；恢复会用备份覆盖当前业务数据与附件（恢复前自动再备份一份）；清空仅删除业务数据，保留账号与系统设置，且不可恢复。</p>
+            <div class="row-flex" style="gap:8px;flex-wrap:wrap">
+              <button class="btn sm" :disabled="busy || restoring" @click="manualBackup">{{ busy ? '备份中…' : '备份' }}</button>
+              <button class="btn sm" :disabled="busy || restoring" @click="openRestoreDialog">从备份恢复…</button>
+            </div>
             <div class="danger-zone">
               <div><b>清空本地业务数据</b><span>删除全部合同、项目、相对方、发票、收付款、日志、附件文件</span></div>
               <button class="btn danger sm" @click="openClearDialog">清空数据</button>
@@ -234,7 +272,7 @@ function toggleRemind(d) {
         </div>
       </div>
       <div class="modal-foot">
-        <button class="btn ghost" @click="emit('close')">关闭</button>
+        <button class="btn ghost" @click="requestClose">关闭</button>
         <button v-if="tab !== 'password' && tab !== 'data' && tab !== 'service'" class="btn primary" :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存设置' }}</button>
       </div>
     </div>
@@ -255,6 +293,25 @@ function toggleRemind(d) {
           <button class="btn ghost" @click="clearDialog = false">取消</button>
           <button class="btn danger" :disabled="clearing || !clearAgree || clearPhrase.trim() !== '清空'" @click="doClear">
             {{ clearing ? '清空中…' : '确认清空' }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <div v-if="restoreDialog" class="modal-mask" @click.self="restoreDialog = false">
+      <div class="modal narrow">
+        <div class="modal-head"><h3>从备份恢复数据</h3><button class="icon-btn" @click="restoreDialog = false">✕</button></div>
+        <div class="modal-body">
+          <div class="clear-warning">
+            <p><b>恢复会覆盖当前全部业务数据与附件</b>，请确认已不需要当前数据。</p>
+            <p>系统会在恢复前自动把当前数据再备份一份（存于数据目录 backups），万一恢复有误可再次恢复回来。</p>
+          </div>
+          <label class="field"><span>选择备份 zip 文件</span><input type="file" accept=".zip" @change="e => restoreFile = e.target.files[0]" /></label>
+          <label class="field"><span>请输入「恢复」以确认</span><input v-model="restorePhrase" placeholder="恢复" /></label>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" @click="restoreDialog = false">取消</button>
+          <button class="btn primary" :disabled="restoring || !restoreFile || restorePhrase.trim() !== '恢复'" @click="doRestore">
+            {{ restoring ? '恢复中…' : '确认恢复' }}
           </button>
         </div>
       </div>
