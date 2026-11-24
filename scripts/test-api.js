@@ -292,5 +292,38 @@ function call(method, p, body = {}, query = {}) {
   assert.strictEqual(call('GET', '/api/health').contracts, cntBefore)
   console.log('✓ 备份恢复：导出→改动→恢复→数据还原')
 
+  // ===== 第二批反馈（4.9/4.10/4.11）=====
+  // 31. 方向归属：对内合同无期次流水计入已付而非已收
+  const anyParty = db.all('SELECT id FROM party LIMIT 1')[0]
+  const outCreated = call('POST', '/api/contracts', { contract_no: 'DIRTEST001', title: '方向归属测试', direction: '对内', type: '采购', status: '草稿', party_id: anyParty.id, amount: 10000 })
+  const outC = db.one("SELECT id FROM contract WHERE contract_no='DIRTEST001'")
+  const beforeV = call('GET', `/api/contracts/${outC.id}`).summary
+  call('POST', '/api/payment-records', { contractId: outC.id, plan_id: '', amount: 7788, pay_date: '2026-11-24', nature: 'contract' })
+  const afterV = call('GET', `/api/contracts/${outC.id}`).summary
+  assert.strictEqual(afterV.received, beforeV.received, '对内合同流水不应计入已收')
+  assert.strictEqual(afterV.paid, beforeV.paid + 7788, '对内合同无期次流水应计入已付')
+  console.log('✓ 方向归属：对内无期次流水计入已付而非已收')
+
+  // 32. 看板收支全景字段
+  const dashOv = call('GET', '/api/dashboard')
+  assert.ok('incomeAmount' in dashOv.overview && 'expenseAmount' in dashOv.overview && 'netSigned' in dashOv.overview && 'netCash' in dashOv.overview)
+  assert.strictEqual(dashOv.overview.received, dashOv.finance.received)
+  assert.strictEqual(dashOv.overview.paid, dashOv.finance.paid)
+  console.log('✓ 看板收支全景：合同金额/已收已付/双口径差额')
+
+  // 33. 项目资金视图四栏
+  const pstats2 = call('GET', '/api/stats/by-project').list
+  if (pstats2.length) assert.ok(['received', 'paid', 'remainIn', 'remainOut', 'planIn', 'planOut'].every((k) => k in pstats2[0]))
+  console.log('✓ 项目资金视图：收/付分开 + 已收未收已付未付')
+
+  // 34. viewer 只读角色
+  call('POST', '/api/users', { username: 'client01', name: '张客户', role: 'viewer', password: '123456' })
+  const viewerLogin = call('POST', '/api/login', { username: 'client01', password: '123456' })
+  assert.strictEqual(viewerLogin.user.role, 'viewer')
+  assert.ok(call('GET', '/api/dashboard', {}, {}))
+  const viewerDenied = (() => { try { return dispatch('POST', '/api/contracts', {}, {}, { source: 'ipc', trusted: true, token: viewerLogin.token }) } catch (e) { return e.message } })()
+  assert.match(String(viewerDenied), /只读客户/)
+  console.log('✓ 只读客户账号：可读 / 写操作被拒')
+
   console.log('\n✅ 全部冒烟测试通过')
 })().catch((e) => { console.error('❌ 测试失败:', e.message); console.error(e.stack); process.exit(1) })

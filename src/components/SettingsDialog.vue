@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, computed } from 'vue'
 import { api, isDesktop } from '../api'
 import { toast } from '../utils'
 import ChangePassword from './ChangePassword.vue'
@@ -12,7 +12,17 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'saved', 'cleared'])
 
-const tab = ref(props.initialTab)
+// V1.2（4.11）：只读客户只能改自己的密码
+const isViewer = computed(() => props.role === 'viewer')
+const tab = ref(isViewer.value ? 'password' : props.initialTab)
+const visibleTabs = computed(() => isViewer.value
+  ? [{ k: 'password', l: '修改密码' }]
+  : [
+      { k: 'dict', l: '合同类型' }, { k: 'category', l: '费用分类' }, { k: 'code', l: '编号与金额' },
+      { k: 'approval', l: '审批阈值' }, { k: 'remind', l: '提醒与归档' },
+      { k: 'security', l: '脱敏设置' }, { k: 'labels', l: '显示文案' }, { k: 'password', l: '修改密码' },
+      ...(props.role === 'admin' ? [{ k: 'service', l: '局域网服务' }, { k: 'data', l: '数据管理' }] : []),
+    ])
 // 清空数据二次确认（危险操作：需勾选同意 + 输入"清空"）
 const clearDialog = ref(false)
 const clearAgree = ref(false)
@@ -162,12 +172,7 @@ function toggleRemind(d) {
       <div class="modal-head"><h3>系统设置</h3><button class="icon-btn" @click="requestClose">✕</button></div>
       <div class="settings-layout">
         <div class="settings-nav">
-          <button v-for="t in [
-            { k:'dict', l:'合同类型' }, { k:'category', l:'费用分类' }, { k:'code', l:'编号与金额' },
-            { k:'approval', l:'审批阈值' }, { k:'remind', l:'提醒与归档' },
-            { k:'security', l:'脱敏设置' }, { k:'labels', l:'显示文案' }, { k:'password', l:'修改密码' },
-            ...(role === 'admin' ? [{ k:'service', l:'局域网服务' }, { k:'data', l:'数据管理' }] : [])
-          ]" :key="t.k" :class="{ active: tab === t.k }" @click="tab = t.k">{{ t.l }}</button>
+          <button v-for="t in visibleTabs" :key="t.k" :class="{ active: tab === t.k }" @click="tab = t.k">{{ t.l }}</button>
         </div>
         <div class="settings-content">
           <div v-if="tab === 'dict'" class="setting-section">

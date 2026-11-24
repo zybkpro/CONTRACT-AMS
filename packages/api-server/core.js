@@ -15,6 +15,8 @@ class ApiError extends Error {
 const WRITE_METHODS = ['POST', 'PUT', 'DELETE', 'PATCH']
 // H5 只读模式下放行的接口（查阅与登记类，按角色另在业务层约束）
 const READONLY_ALLOWED = ['/api/auth', '/api/bootstrap', '/api/h5/register-payment']
+// V1.2（4.11）：viewer 只读角色唯一放行的写接口——改自己的密码
+const VIEWER_WRITE_ALLOWED = ['/api/change-password']
 
 const CONTRACT_FIELDS = ['contract_no', 'title', 'direction', 'type', 'status', 'project_id', 'party_id', 'parent_id',
   'our_entity', 'amount', 'currency', 'sign_date', 'start_date', 'end_date', 'auto_renew', 'terminate_note', 'owner', 'remark',
@@ -37,16 +39,31 @@ function contractName(id) { const c = db.one('SELECT title, contract_no FROM con
 function projectName(id) { const p = db.one('SELECT name FROM project WHERE id=?', [id]); return p ? p.name : '' }
 function partyName(id) { const p = db.one('SELECT name FROM party WHERE id=?', [id]); return p ? p.name : '' }
 
+/**
+ * V1.2（4.10）：统一的流水方向归属——看板/台账/项目/H5 全复用，杜绝口径不一致。
+ * 优先级：① 关联期次的 direction；② 无期次按所属合同 direction（对外=收，对内=付）；③ 都不明归 unknown。
+ * @returns {'in'|'out'|'unknown'}
+ */
+function paymentSide(record, contract, plan) {
+  if (plan && (plan.direction === '应收' || plan.direction === '应付'))
+    return plan.direction === '应收' ? 'in' : 'out'
+  if (contract && (contract.direction === '对外' || contract.direction === '对内'))
+    return contract.direction === '对外' ? 'in' : 'out'
+  return 'unknown'
+}
+
 /** 合同视图：补全展示字段 + 收付款汇总 */
 function contractView(c) {
   const plans = db.all('SELECT * FROM payment_plan WHERE contract_id=?', [c.id])
   const recs = db.all('SELECT * FROM payment_record WHERE contract_id=?', [c.id])
   const sumIn = plans.filter((p) => p.direction === '应收').reduce((s, p) => s + Number(p.plan_amount || 0), 0)
   const sumOut = plans.filter((p) => p.direction === '应付').reduce((s, p) => s + Number(p.plan_amount || 0), 0)
-  const recIn = db.one(`SELECT COALESCE(SUM(r.amount),0) AS n FROM payment_record r
-    LEFT JOIN payment_plan p ON p.id=r.plan_id WHERE r.contract_id=? AND (p.direction='应收' OR p.id IS NULL)`, [c.id]).n
-  const recOut = db.one(`SELECT COALESCE(SUM(r.amount),0) AS n FROM payment_record r
-    JOIN payment_plan p ON p.id=r.plan_id WHERE r.contract_id=? AND p.direction='应付'`, [c.id]).n
+  // V1.2：统一用 paymentSide 归属方向，只统计合同款（罚息类不计回款）
+  const planById = new Map(plans.map((p) => [p.id, p]))
+  const contractRecs = recs.filter((r) => (r.nature || 'contract') === 'contract')
+  const recIn = contractRecs.filter((r) => paymentSide(r, c, planById.get(r.plan_id)) === 'in').reduce((s, r) => s + Number(r.amount || 0), 0)
+  const recOut = contractRecs.filter((r) => paymentSide(r, c, planById.get(r.plan_id)) === 'out').reduce((s, r) => s + Number(r.amount || 0), 0)
+  const unknownRecv = contractRecs.filter((r) => paymentSide(r, c, planById.get(r.plan_id)) === 'unknown').reduce((s, r) => s + Number(r.amount || 0), 0)
   const fileCount = db.one('SELECT COUNT(*) AS n FROM contract_file WHERE contract_id=?', [c.id]).n
   const msDone = db.one("SELECT COUNT(*) AS n FROM milestone WHERE contract_id=? AND status='已完成'", [c.id]).n
   const msTotal = db.one('SELECT COUNT(*) AS n FROM milestone WHERE contract_id=?', [c.id]).n
@@ -62,7 +79,7 @@ function contractView(c) {
     payment_records: recs,
     approvals: db.all('SELECT * FROM approval_log WHERE contract_id=? ORDER BY created_at DESC', [c.id]),
     summary: {
-      planIn: sumIn, planOut: sumOut, received: recIn, paid: recOut,
+      planIn: sumIn, planOut: sumOut, received: recIn, paid: recOut, unknownRecv,
       remainIn: Math.round((sumIn - recIn) * 100) / 100,
       remainOut: Math.round((sumOut - recOut) * 100) / 100,
       fileCount, msDone, msTotal,
@@ -129,10 +146,14 @@ function dashboard(list) {
   // V1.1：在签收入/支出分列（方向=对外/对内 且 状态∈已签署/履约中）
   const SIGNED = ['已签署', '履约中']
   let inSignIncome = 0, inSignExpense = 0
+  // V1.2（4.9）：全量合同金额按方向分（收入/支出），供看板收支全景
+  let amountIn = 0, amountOut = 0, countIn = 0, countOut = 0
   const inSign = (c) => SIGNED.includes(c.status) && !c.archived
   for (const c of list) {
     byStatus[c.status] = (byStatus[c.status] || 0) + 1
     if (c.direction in byDirection) byDirection[c.direction]++
+    if (c.direction === '对外') { amountIn += Number(c.amount || 0); countIn++ }
+    else if (c.direction === '对内') { amountOut += Number(c.amount || 0); countOut++ }
     if (c.status === '履约中') inProgress++
     if (c.archived) archived++
     if (inSign(c)) {
@@ -157,8 +178,12 @@ function dashboard(list) {
   const planIn = plans.filter((p) => p.direction === '应收' && p.nature === 'contract').reduce((s, p) => s + num(p.plan_amount), 0)
   const planOut = plans.filter((p) => p.direction === '应付' && p.nature === 'contract').reduce((s, p) => s + num(p.plan_amount), 0)
   // 实际到账：合同款且（关联应收计划 或 无计划）；应付：关联应付计划
-  const received = recs.filter((r) => r.nature === 'contract' && (!r.plan_id || planById.get(r.plan_id)?.direction === '应收')).reduce((s, r) => s + num(r.amount), 0)
-  const paid = recs.filter((r) => r.nature === 'contract' && planById.get(r.plan_id)?.direction === '应付').reduce((s, r) => s + num(r.amount), 0)
+  // V1.2：用公共 paymentSide 归属方向（无期次按合同方向兜底），与台账/项目/H5 口径一致
+  const contractById = new Map(list.map((c) => [c.id, c]))
+  const contractRecs = recs.filter((r) => (r.nature || 'contract') === 'contract')
+  const received = contractRecs.filter((r) => paymentSide(r, contractById.get(r.contract_id), planById.get(r.plan_id)) === 'in').reduce((s, r) => s + num(r.amount), 0)
+  const paid = contractRecs.filter((r) => paymentSide(r, contractById.get(r.contract_id), planById.get(r.plan_id)) === 'out').reduce((s, r) => s + num(r.amount), 0)
+  const unknownRecv = contractRecs.filter((r) => paymentSide(r, contractById.get(r.contract_id), planById.get(r.plan_id)) === 'unknown').reduce((s, r) => s + num(r.amount), 0)
   // V1.1 可开关：罚息类合计（展示用，不进回款率）
   const penalties = recs.filter((r) => r.nature !== 'contract').reduce((s, r) => s + num(r.amount), 0)
   return {
@@ -166,8 +191,15 @@ function dashboard(list) {
     inSignIncome, inSignExpense, inSignNet: inSignIncome - inSignExpense,
     soon: soon.slice(0, 10), overdue: overdue.slice(0, 10),
     soonCount: soon.length, overdueCount: overdue.length,
-    penalties,
-    finance: { planIn, planOut, received, paid, remainIn: planIn - received, remainOut: planOut - paid,
+    penalties, unknownRecv,
+    // V1.2（4.9）收支全景：签订口径（合同金额）与现金流口径（已收/已付）分列
+    overview: {
+      incomeAmount: amountIn, expenseAmount: amountOut, countIn, countOut,
+      netSigned: Math.round((amountIn - amountOut) * 100) / 100,
+      netCash: Math.round((received - paid) * 100) / 100,
+      received, paid,
+    },
+    finance: { planIn, planOut, received, paid, unknownRecv, remainIn: planIn - received, remainOut: planOut - paid,
       receiveRate: planIn ? Math.round(received / planIn * 100) : 0 },
   }
 }
@@ -226,6 +258,10 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
   if (ctx.source === 'http' && ctx.readOnly && isWrite && !READONLY_ALLOWED.includes(p)) {
     throw new ApiError(403, '当前主机已开启只读模式，远端客户端不可修改数据')
   }
+  // V1.2（4.11）：viewer 只读角色——服务端强制拒绝一切写操作（改自己密码除外）
+  if (role === 'viewer' && isWrite && !VIEWER_WRITE_ALLOWED.includes(p)) {
+    throw new ApiError(403, '当前账号为只读客户，无权修改数据')
+  }
 
   // ---------- 认证（公共接口，无需登录） ----------
   if (p === '/api/login' && method === 'POST') {
@@ -234,9 +270,9 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
     if (!u) throw new ApiError(401, '账号不存在')
     if (u.status !== '启用') throw new ApiError(403, '该账号已停用，请联系管理员')
     if (u.password_hash !== db.hashPassword(body.password)) throw new ApiError(401, '密码不正确')
-    // 当前仅开放超级管理员登录（可在设置中关闭该限制以恢复多角色）
-    if (db.getSettings().onlyAdminLogin !== false && u.role !== 'admin')
-      throw new ApiError(403, '当前仅开放超级管理员登录，其他角色暂未开放')
+    // 当前开放超级管理员 + 只读客户登录（可在设置中关闭限制以恢复多角色）
+    if (db.getSettings().onlyAdminLogin !== false && !['admin', 'viewer'].includes(u.role))
+      throw new ApiError(403, '当前仅开放超级管理员与只读客户登录，其他角色暂未开放')
     const token = issueToken(u.id)
     return { status: 200, data: { token, user: publicUser(u) } }
   }
@@ -1007,12 +1043,31 @@ function dispatch(method, pathname, query, body = {}, ctx = {}) {
   // ---------- 统计（按项目 / 相对方） ----------
   if (p === '/api/stats/by-project' && method === 'GET') {
     const list = db.all('SELECT * FROM contract WHERE deleted_at IS NULL')
+    // V1.2：项目资金视图——收/付分开 + 已收/未收/已付/未付，统一用 paymentSide 口径
+    const allPlans = db.all('SELECT * FROM payment_plan')
+    const allRecs = db.all('SELECT * FROM payment_record')
     const out = db.all('SELECT * FROM project').map((pr) => {
       const cs = list.filter((c) => c.project_id === pr.id)
-      const receiveAmount = cs.filter((c) => c.type === '项目收款合同').reduce((s, c) => s + Number(c.amount || 0), 0)
-      const payAmount = cs.filter((c) => c.type === '项目支付合同').reduce((s, c) => s + Number(c.amount || 0), 0)
-      return { ...pr, contractCount: cs.length, amount: cs.reduce((s, c) => s + Number(c.amount || 0), 0),
-        receiveAmount, payAmount, netAmount: Math.round((receiveAmount - payAmount) * 100) / 100 }
+      const ids = new Set(cs.map((c) => c.id))
+      const plans = allPlans.filter((pl) => ids.has(pl.contract_id) && (pl.nature || 'contract') === 'contract')
+      const recs = allRecs.filter((r) => ids.has(r.contract_id) && (r.nature || 'contract') === 'contract')
+      const planById = new Map(plans.map((pl) => [pl.id, pl]))
+      const contractById = new Map(cs.map((c) => [c.id, c]))
+      const n = (v) => Number(v || 0)
+      // 合同金额按方向分（对外=收入合同，对内=支出合同）
+      const receiveAmount = cs.filter((c) => c.direction === '对外').reduce((s, c) => s + n(c.amount), 0)
+      const payAmount = cs.filter((c) => c.direction === '对内').reduce((s, c) => s + n(c.amount), 0)
+      // 计划与实收（复用公共归属函数）
+      const planIn = plans.filter((pl) => pl.direction === '应收').reduce((s, pl) => s + n(pl.plan_amount), 0)
+      const planOut = plans.filter((pl) => pl.direction === '应付').reduce((s, pl) => s + n(pl.plan_amount), 0)
+      const received = recs.filter((r) => paymentSide(r, contractById.get(r.contract_id), planById.get(r.plan_id)) === 'in').reduce((s, r) => s + n(r.amount), 0)
+      const paid = recs.filter((r) => paymentSide(r, contractById.get(r.contract_id), planById.get(r.plan_id)) === 'out').reduce((s, r) => s + n(r.amount), 0)
+      return { ...pr, contractCount: cs.length, amount: cs.reduce((s, c) => s + n(c.amount), 0),
+        receiveAmount, payAmount, netAmount: Math.round((receiveAmount - payAmount) * 100) / 100,
+        planIn, planOut, received, paid,
+        remainIn: Math.round((planIn - received) * 100) / 100,
+        remainOut: Math.round((planOut - paid) * 100) / 100,
+      }
     })
     return { status: 200, data: { list: out } }
   }

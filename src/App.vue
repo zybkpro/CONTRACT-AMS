@@ -298,6 +298,12 @@ function doExportPayments() {
   toast('收付款汇总已导出', 'success')
 }
 function switchView(v) { view.value = v }
+// V1.2（4.9）：看板金额下钻到台账并带方向筛选
+function drillOverview(which) {
+  direction.value = which === 'income' ? '对外' : which === 'expense' ? '对内' : '全部'
+  status.value = '全部'
+  view.value = 'ledger'
+}
 function onSettingsSaved(s) { settings.value = { ...settings.value, ...s }; dialog.value = null; load() }
 /** 清空业务数据后：关弹窗、清选中、回台账并重新加载 */
 async function onDataCleared() {
@@ -349,6 +355,7 @@ async function onDataCleared() {
             <span class="avatar">{{ (currentUser?.name || '?').slice(0, 1) }}</span>
             <b>{{ currentUser?.name }}</b>
             <span class="tag-cell tag-cyan">{{ ROLE_LABEL[currentUser?.role] || currentUser?.role }}</span>
+            <span v-if="role === 'viewer'" class="tag-cell tag-amber" title="只读账号：可浏览，不可修改任何数据">只读视图</span>
           </span>
           <button class="icon-btn top-icon-btn refresh-btn" :class="{ spinning: refreshing }" :disabled="refreshing" @click="refreshData" title="刷新数据" aria-label="刷新数据">
             <svg class="top-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -367,6 +374,15 @@ async function onDataCleared() {
         </div>
       </header>
 
+      <!-- V1.2（4.9）收支全景：合同金额 → 已收/已付 → 差额 -->
+      <section class="kpi-strip overview-strip">
+        <div class="kpi clickable" title="方向=对外的全部合同金额；点击下钻到台账" @click="drillOverview('income')"><label>收入合同</label><b class="cyan">¥{{ formatMoney(dashboard?.overview?.incomeAmount || 0, 0) }}</b><small>{{ dashboard?.overview?.countIn || 0 }} 份</small></div>
+        <div class="kpi" title="合同款性质的已收合计（无期次流水按合同方向归属）"><label>已收</label><b class="green">¥{{ formatMoney(dashboard?.overview?.received || 0, 0) }}</b></div>
+        <div class="kpi clickable" title="方向=对内的全部合同金额；点击下钻到台账" @click="drillOverview('expense')"><label>支出合同</label><b class="red">¥{{ formatMoney(dashboard?.overview?.expenseAmount || 0, 0) }}</b><small>{{ dashboard?.overview?.countOut || 0 }} 份</small></div>
+        <div class="kpi" title="合同款性质的已付合计（无期次流水按合同方向归属）"><label>已付</label><b class="green">¥{{ formatMoney(dashboard?.overview?.paid || 0, 0) }}</b></div>
+        <div class="kpi" title="收入合同金额 − 支出合同金额（签订口径）"><label>合同差额</label><b :class="(dashboard?.overview?.netSigned || 0) >= 0 ? 'cyan' : 'red'">¥{{ formatMoney(dashboard?.overview?.netSigned || 0, 0) }}</b></div>
+        <div class="kpi" title="已收 − 已付（现金流口径）"><label>现金净额</label><b :class="(dashboard?.overview?.netCash || 0) >= 0 ? 'cyan' : 'red'">¥{{ formatMoney(dashboard?.overview?.netCash || 0, 0) }}</b></div>
+      </section>
       <!-- 摘要 KPI -->
       <section class="kpi-strip">
         <div class="kpi"><label>合同总数</label><b>{{ dashboard?.total || 0 }}</b></div>
@@ -379,7 +395,7 @@ async function onDataCleared() {
         <div class="kpi"><label>应收未收</label><b class="amber">¥{{ formatMoney(dashboard?.finance?.remainIn || 0, 0) }}</b></div>
         <div class="kpi"><label>回款率</label><b class="green">{{ dashboard?.finance?.receiveRate || 0 }}%</b></div>
       </section>
-      <div class="kpi-note">金额口径：{{ settings.amountBasis || '含税' }} · 在签收入/支出按「对外/对内 且 已签署/履约中」统计</div>
+      <div class="kpi-note">口径：金额均为{{ settings.amountBasis || '含税' }} · 收支全景按全部合同方向统计（点击金额下钻台账）· 在签收入/支出按「对外/对内 且 已签署/履约中」统计 · 已收/已付仅含合同款（罚息类不计）</div>
 
       <!-- 工具栏 -->
       <div class="toolbar">

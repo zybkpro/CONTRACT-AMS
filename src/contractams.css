@@ -14,6 +14,12 @@
 .kpi b { color: var(--text-strong); font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 700; }
 .kpi b.cyan { color: var(--cyan); } .kpi b.green { color: var(--green); }
 .kpi b.amber { color: var(--amber); } .kpi b.red { color: var(--red); }
+/* V1.2 收支全景条 */
+.overview-strip { background: rgba(63,211,255,.04); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.overview-strip .kpi { background: rgba(63,211,255,.06); }
+.overview-strip .kpi small { color: var(--muted); font-size: 10.5px; }
+.kpi.clickable { cursor: pointer; transition: border-color .15s, background .15s; }
+.kpi.clickable:hover { border-color: var(--cyan); background: rgba(63,211,255,.12); }
 
 /* ---------- 顶部角色切换 ---------- */
 .role-switch { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
@@ -176,10 +182,12 @@
 .entity-card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 14px; }
 .ec-title { color: var(--text-strong); font-size: 15px; font-weight: 700; }
 .ec-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.ec-stats { display: flex; gap: 20px; margin: 10px 0; }
+.ec-stats { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0; }
 .ec-stats > div { display: flex; flex-direction: column; gap: 2px; }
 .ec-stats label { color: var(--muted); font-size: 11px; }
 .ec-stats b { color: var(--cyan); font-size: 14px; }
+.ec-stats b.green { color: var(--green); } .ec-stats b.amber { color: var(--amber); }
+.ec-stats b.red { color: var(--red); } .ec-stats b.cyan { color: var(--cyan); }
 .ec-fields { color: var(--muted); font-size: 11.5px; margin: 4px 0; }
 .ec-contracts { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .ec-foot { margin-top: 10px; display: flex; gap: 8px; }

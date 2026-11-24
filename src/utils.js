@@ -31,7 +31,7 @@ export const DIRECTION_META = {
   对外: { tag: 'tag-cyan', color: '#3fd3ff' },
 }
 export const CHART_COLORS = ['#3fd3ff', '#2f7cf6', '#3ce0a5', '#ffbe4d', '#ff8fa3', '#a58bff', '#4dd6c1', '#ff9f6e']
-export const ROLE_LABEL = { admin: '管理员', biz: '商务', pm: '项目经理', finance: '财务' }
+export const ROLE_LABEL = { admin: '管理员', biz: '商务', pm: '项目经理', finance: '财务', viewer: '客户（只读）' }
 
 export const LIST_COLUMNS = [
   { key: 'contract_no', label: '合同编号', width: 128 },

@@ -72,11 +72,15 @@ function contractsOf(x) {
         </div>
         <div class="ec-stats">
           <div><label>关联合同</label><b>{{ stat(x.id).contractCount || 0 }} 份</b></div>
-          <div><label>合同金额</label><b>¥{{ formatMoney(stat(x.id).amount) }}</b></div>
+          <div v-if="mode !== 'project'"><label>合同金额</label><b>¥{{ formatMoney(stat(x.id).amount) }}</b></div>
           <template v-if="mode === 'project'">
-            <div><label>收款合同</label><b class="green">¥{{ formatMoney(stat(x.id).receiveAmount) }}</b></div>
-            <div><label>支付合同</label><b class="red">¥{{ formatMoney(stat(x.id).payAmount) }}</b></div>
-            <div><label>净额</label><b>¥{{ formatMoney(stat(x.id).netAmount) }}</b></div>
+            <div><label>收入合同</label><b class="cyan">¥{{ formatMoney(stat(x.id).receiveAmount) }}</b></div>
+            <div><label>已收</label><b class="green">¥{{ formatMoney(stat(x.id).received) }}</b></div>
+            <div><label>未收</label><b class="amber">¥{{ formatMoney(stat(x.id).remainIn) }}</b></div>
+            <div><label>支出合同</label><b class="red">¥{{ formatMoney(stat(x.id).payAmount) }}</b></div>
+            <div><label>已付</label><b class="green">¥{{ formatMoney(stat(x.id).paid) }}</b></div>
+            <div><label>未付</label><b class="amber">¥{{ formatMoney(stat(x.id).remainOut) }}</b></div>
+            <div><label>合同净额</label><b>¥{{ formatMoney(stat(x.id).netAmount) }}</b></div>
           </template>
         </div>
         <div v-if="mode === 'party'" class="ec-fields">

@@ -48,8 +48,8 @@ const DEFAULT_CONFIG = { port: 8788, token: '', h5ReadOnly: false, autoStart: fa
 
 const STATUS = ['草稿', '审批中', '已驳回', '已签署', '履约中', '已完成', '已终止', '已归档']
 const DIRECTION = ['对内', '对外']
-const ROLES = ['admin', 'biz', 'pm', 'finance']
-const ROLE_LABEL = { admin: '管理员', biz: '商务', pm: '项目经理', finance: '财务' }
+const ROLES = ['admin', 'biz', 'pm', 'finance', 'viewer']
+const ROLE_LABEL = { admin: '管理员', biz: '商务', pm: '项目经理', finance: '财务', viewer: '客户（只读）' }
 // V1.1 枚举
 const INVOICE_DIRECTIONS = ['开票', '收票']
 const INVOICE_TYPES = ['专票', '普票', '电子票', '其他']
