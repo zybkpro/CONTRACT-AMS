@@ -163,7 +163,7 @@
 
 /* ---------- 看板 ---------- */
 .board-view { flex: 1; overflow: auto; min-height: 0; }
-.charts-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.charts-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 .chart-block { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 12px; }
 .chart-title { color: var(--text-strong); font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .chart-canvas { height: 260px; }
