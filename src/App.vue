@@ -202,7 +202,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => { clearInterval(timer) })
 
-function onSelect(id) { selectedId.value = id; openDetail({ id }) }
+function onSelect(id) { selectedId.value = id }
 function openDetail(row) {
   const c = row || selected.value
   if (!c) return toast('请先选中一行合同', 'warn')
@@ -248,9 +248,11 @@ function resetFilter() { keyword.value = ''; direction.value = '全部'; status.
 
 function onTableAction({ type, row }) {
   if (type === 'edit') return openEdit(row)
+  if (type === 'delete') return requestDelete(row)
+  if (type === 'supplement') return openSupplement(row)
   if (type === 'logs') return openDetail(row)
   if (type === 'unarchive') return doArchive(row, 'unarchive')
-  if (type === 'more') dialog.value = { name: 'contract-actions', payload: { row } }
+  if (type === 'archive') dialog.value = { name: 'archive', payload: { row } }
 }
 async function doArchive(row, action) {
   if (action === 'unarchive' && role.value !== 'admin') return toast('仅管理员可解档', 'error')
@@ -410,9 +412,6 @@ async function onDataCleared() {
         <span class="divider"></span>
         <template v-if="view === 'ledger'">
           <button v-if="canEdit" class="btn btn-primary" @click="openNew()">＋ 新增合同</button>
-          <button v-if="canEdit" class="btn" @click="openEdit()">编辑</button>
-          <button v-if="canEdit" class="btn" @click="selected && openSupplement(selected)">补充协议</button>
-          <button v-if="role === 'admin'" class="btn btn-danger" @click="selected && requestDelete(selected)">删除</button>
           <button v-if="canEdit" class="btn" @click="dialog = { name: 'import' }">导入</button>
           <button class="btn" @click="downloadTemplate">下载模板</button>
           <button class="btn" @click="doExport">导出</button>
@@ -453,13 +452,13 @@ async function onDataCleared() {
               </div>
               <div v-if="expandedGroups.includes(g.id)" class="proj-group-body">
                 <ContractTable :rows="g.rows" :columns="columns" :selected-id="selectedId" :role="role" :mask="mask"
-                  :remind-days="remindDays" :field-labels="settings.fieldLabels || {}" @select="onSelect" @action="onTableAction" />
+                  :remind-days="remindDays" :field-labels="settings.fieldLabels || {}" @select="onSelect" @detail="openDetail" @action="onTableAction" />
               </div>
             </div>
             <div v-if="!groupedContracts.length" class="empty-row">无合同数据</div>
           </template>
           <ContractTable v-else :rows="filtered" :columns="columns" :selected-id="selectedId" :role="role" :mask="mask"
-            :remind-days="remindDays" :field-labels="settings.fieldLabels || {}" @select="onSelect" @action="onTableAction" />
+            :remind-days="remindDays" :field-labels="settings.fieldLabels || {}" @select="onSelect" @detail="openDetail" @action="onTableAction" />
         </div>
 
         <!-- 看板视图 -->
@@ -517,9 +516,10 @@ async function onDataCleared() {
     <ConfirmDialog v-if="dialog?.name === 'status'" :title="`流转为「${dialog.payload.status}」`"
       :message="`确定将【${dialog.payload.row.contract_no}】流转为「${dialog.payload.status}」？该变更将写入生命周期日志。`"
       confirm-text="确认" @cancel="dialog = null" @confirm="confirmStatus" />
-    <ConfirmDialog v-if="dialog?.name === 'contract-actions'" :title="`合同操作：${dialog.payload.row.contract_no}`"
-      :message="'请选择操作：归档（只读）或删除（不可恢复）。'" confirm-text="归档" @cancel="dialog = null"
-      @confirm="doArchive(dialog.payload.row, 'archive')" />
+    <ConfirmDialog v-if="dialog?.name === 'archive'" :title="`归档合同：${dialog.payload.row.contract_no}`"
+      :message="`确定将【${dialog.payload.row.contract_no}】${dialog.payload.row.title}归档？归档后合同将变为只读，不再出现在默认台账中（可勾选「含归档」查看）。`"
+      note="归档后合同不可编辑，管理员可通过行内「解档」按钮恢复；该操作会记入生命周期日志。"
+      confirm-text="确认归档" @cancel="dialog = null" @confirm="doArchive(dialog.payload.row, 'archive')" />
 
     </template>
     <RecycleBin v-if="showRecycle" @close="showRecycle = false" @restored="load" />

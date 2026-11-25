@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { STATUS_META, DIRECTION_META, LIST_COLUMNS, formatMoney, daysUntil, maskValue, ROLE_LABEL } from '../utils'
+import { STATUS_META, DIRECTION_META, LIST_COLUMNS, formatMoney, daysUntil, maskValue } from '../utils'
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },
@@ -11,9 +11,11 @@ const props = defineProps({
   remindDays: { type: Array, default: () => [30, 15, 7] },
   fieldLabels: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['select', 'action', 'sort'])
+const emit = defineEmits(['select', 'action', 'sort', 'detail'])
 
 const maxRemind = computed(() => Math.max(30, ...(props.remindDays || [])))
+const canEdit = computed(() => props.role === 'admin' || props.role === 'biz')
+const canDelete = computed(() => props.role === 'admin')
 
 function cellClass(row, key) {
   if (key === 'direction') return DIRECTION_META[row.direction]?.tag || ''
@@ -42,25 +44,19 @@ function dueInfo(row) {
     <table class="grid-table">
       <thead>
         <tr>
-          <th class="col-actions">操作</th>
           <th v-for="c in columns" :key="c.key" :style="{ width: c.width + 'px', textAlign: c.align || 'left' }">
             {{ fieldLabels[c.key] || c.label }}
           </th>
           <th class="col-due">到期</th>
-          <th class="col-life">日志</th>
+          <th class="col-actions">操作</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="row.id" :class="{ selected: row.id === selectedId, archived: row.archived }"
             @click="emit('select', row.id)">
-          <td class="col-actions" @click.stop>
-            <button class="mini-btn" title="编辑" @click="emit('action', { type: 'edit', row })">✎</button>
-            <button v-if="!row.archived" class="mini-btn" title="更多" @click="emit('action', { type: 'more', row })">⋯</button>
-            <button v-else class="mini-btn" title="解档" @click="emit('action', { type: 'unarchive', row })">↩</button>
-          </td>
           <td v-for="c in columns" :key="c.key" :style="{ textAlign: c.align || 'left' }">
             <template v-if="c.key === 'title'">
-              <span class="title-cell">{{ cellText(row, c.key) }}</span>
+              <span class="title-cell" title="点击查看合同详情" @click.stop="emit('select', row.id); emit('detail', row)">{{ cellText(row, c.key) }}</span>
               <span v-if="row.parent_id" class="sub-tag">补充协议</span>
             </template>
             <span v-else class="tag-cell" :class="cellClass(row, c.key)">{{ cellText(row, c.key) }}</span>
@@ -69,12 +65,17 @@ function dueInfo(row) {
             <span v-if="dueInfo(row)" class="due-tag" :class="dueInfo(row).cls">{{ dueInfo(row).text }}</span>
             <span v-else class="muted">—</span>
           </td>
-          <td class="col-life" @click.stop>
-            <button class="mini-btn" title="生命周期日志" @click="emit('action', { type: 'logs', row })">🕘</button>
+          <td class="col-actions" @click.stop>
+            <button v-if="canEdit" class="mini-btn" title="编辑" @click="emit('action', { type: 'edit', row })">✎</button>
+            <button class="mini-btn" title="查看详情" @click="emit('select', row.id); emit('detail', row)">☰</button>
+            <button v-if="canDelete" class="mini-btn danger" title="删除" @click="emit('action', { type: 'delete', row })">🗑</button>
+            <button v-if="canEdit && !row.archived" class="mini-btn" title="补充协议" @click="emit('action', { type: 'supplement', row })">⊕</button>
+            <button v-if="!row.archived" class="mini-btn" title="归档" @click="emit('action', { type: 'archive', row })">⊞</button>
+            <button v-else class="mini-btn" title="解档" @click="emit('action', { type: 'unarchive', row })">↩</button>
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 3" class="empty-row">暂无合同，点击「新增合同」开始，或先下载导入模板。</td>
+          <td :colspan="columns.length + 2" class="empty-row">暂无合同，点击「新增合同」开始，或先下载导入模板。</td>
         </tr>
       </tbody>
     </table>
@@ -82,11 +83,12 @@ function dueInfo(row) {
 </template>
 
 <style scoped>
-.col-actions { width: 74px; }
-.col-life { width: 48px; }
+.col-actions { width: 160px; white-space: nowrap; }
 .col-due { width: 96px; }
+.col-actions .mini-btn { margin-right: 4px; }
 .muted { color: #58738a; }
-.title-cell { color: #e6f2ff; font-weight: 500; }
+.title-cell { color: #e6f2ff; font-weight: 500; cursor: pointer; }
+.title-cell:hover { color: var(--cyan); text-decoration: underline; }
 .sub-tag { margin-left: 6px; font-size: 10px; padding: 1px 5px; border-radius: 3px; color: #ffbe4d; border: 1px solid rgba(255,190,77,.35); }
 .due-tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
 .due-soon { color: #ffbe4d; background: rgba(255,190,77,.12); }
