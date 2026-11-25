@@ -66,12 +66,24 @@ function dueInfo(row) {
             <span v-else class="muted">—</span>
           </td>
           <td class="col-actions" @click.stop>
-            <button v-if="canEdit" class="mini-btn" title="编辑" @click="emit('action', { type: 'edit', row })">✎</button>
-            <button class="mini-btn" title="查看详情" @click="emit('select', row.id); emit('detail', row)">☰</button>
-            <button v-if="canDelete" class="mini-btn danger" title="删除" @click="emit('action', { type: 'delete', row })">🗑</button>
-            <button v-if="canEdit && !row.archived" class="mini-btn" title="补充协议" @click="emit('action', { type: 'supplement', row })">⊕</button>
-            <button v-if="!row.archived" class="mini-btn" title="归档" @click="emit('action', { type: 'archive', row })">⊞</button>
-            <button v-else class="mini-btn" title="解档" @click="emit('action', { type: 'unarchive', row })">↩</button>
+            <button v-if="canEdit" class="mini-btn" title="编辑" @click="emit('action', { type: 'edit', row })">
+              <svg class="mini-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            <button class="mini-btn" title="查看详情" @click="emit('select', row.id); emit('detail', row)">
+              <svg class="mini-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+            <button v-if="canDelete" class="mini-btn danger" title="删除" @click="emit('action', { type: 'delete', row })">
+              <svg class="mini-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6M10 11v5M14 11v5"/></svg>
+            </button>
+            <button v-if="canEdit && !row.archived" class="mini-btn" title="补充协议" @click="emit('action', { type: 'supplement', row })">
+              <svg class="mini-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+            </button>
+            <button v-if="!row.archived" class="mini-btn" title="归档" @click="emit('action', { type: 'archive', row })">
+              <svg class="mini-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8M10 12h4"/></svg>
+            </button>
+            <button v-else class="mini-btn" title="解档" @click="emit('action', { type: 'unarchive', row })">
+              <svg class="mini-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
+            </button>
           </td>
         </tr>
         <tr v-if="!rows.length">

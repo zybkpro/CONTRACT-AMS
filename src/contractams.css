@@ -35,9 +35,12 @@
 .tag-red { color: var(--red); background: rgba(255, 107, 107, .12); border: 1px solid rgba(255, 107, 107, .3); }
 .tag-pink { color: var(--pink); background: rgba(255, 143, 163, .12); border: 1px solid rgba(255, 143, 163, .3); }
 .mini-btn {
-  height: 22px; min-width: 22px; padding: 0 5px; margin: 0 1px; border: 1px solid var(--line);
+  width: 24px; height: 24px; padding: 0; margin: 0 2px; border: 1px solid var(--line);
   background: rgba(10, 40, 74, .7); color: var(--muted); border-radius: 4px; font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
 }
+/* 操作列图标统一为线性 SVG，尺寸一致（之前混用字符/emoji 导致大小不一） */
+.mini-ico { width: 13px; height: 13px; display: block; }
 .mini-btn:hover { color: var(--cyan); border-color: var(--cyan); }
 .mini-btn.danger:hover { color: var(--red); border-color: var(--red); }
 .icon-btn { width: 26px; height: 26px; border: 0; background: transparent; color: var(--muted); font-size: 16px; border-radius: 4px; }
