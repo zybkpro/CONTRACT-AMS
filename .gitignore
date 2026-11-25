@@ -24,3 +24,9 @@ data-test/media/*
 data-test/backups/
 data-test/bk-test/
 data-test-proj/
+
+# 官网安装包（体积大，勿入 git；本地下载可放 site/downloads）
+site/downloads/*.zip
+site/downloads/*.dmg
+site/downloads/*.exe
+site/downloads/*.AppImage

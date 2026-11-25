@@ -1,0 +1,45 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main, v1.2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare site
+        run: |
+          mkdir -p _site
+          cp -R site/. _site/
+          # 安装包不进 git，下载走网盘；保留 README 说明
+          rm -f _site/downloads/*.zip _site/downloads/*.dmg _site/downloads/*.exe || true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
