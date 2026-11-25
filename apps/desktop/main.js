@@ -61,7 +61,8 @@ function wrap(fn) {
     try { return { ok: true, data: await fn(payload || {}) } }
     catch (err) {
       if (!(err instanceof ApiError)) appLog(`✗ IPC 异常：${err?.stack || err?.message || err}`)
-      return { ok: false, error: err.message || '操作失败' }
+      // 带出 status，前端才能识别 401 并跳回登录页
+      return { ok: false, error: err.message || '操作失败', status: err.status || 500 }
     }
   }
 }

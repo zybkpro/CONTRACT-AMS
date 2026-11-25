@@ -50,7 +50,12 @@ async function request(path, options = {}) {
     const query = Object.fromEntries(new URLSearchParams(qs || ''))
     const body = options.body ? JSON.parse(options.body) : {}
     const r = await window.contractams.invoke(method, pathname, query, body, getSession())
-    if (!r.ok) throw new Error(r.error || '操作失败')
+    if (!r.ok) {
+      const e = new Error(r.error || '操作失败')
+      e.status = r.status || 0
+      e.code = r.status === 401 ? 'UNAUTHORIZED' : ''
+      throw e
+    }
     return r.data
   }
   const headers = { 'Content-Type': 'application/json', 'X-CONTRACTAMS-Session': getSession(), ...(options.headers || {}) }

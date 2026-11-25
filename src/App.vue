@@ -97,7 +97,10 @@ const selected = computed(() => contracts.value.find((c) => c.id === selectedId.
 
 async function loadDashboard() {
   try { dashboard.value = await api.dashboard(projectFilter.value === '全部' ? '' : projectFilter.value) }
-  catch (e) { toast(`看板加载失败：${e.message}`, 'error') }
+  catch (e) {
+    if (isUnauthorized(e)) { backToLogin(); return }
+    toast(`看板加载失败：${e.message}`, 'error')
+  }
 }
 // 项目筛选联动看板（P0-2）
 watch(projectFilter, () => loadDashboard())
@@ -116,7 +119,11 @@ async function load() {
       const fresh = d.contracts.find((c) => c.id === detail.value.id)
       if (fresh) detail.value = await api.getContract(fresh.id)
     }
-  } catch (e) { toast(`数据加载失败：${e.message}`, 'error') }
+  } catch (e) {
+    // 未登录 / 会话失效：跳回登录页，不停在主界面显示空数据
+    if (isUnauthorized(e)) { backToLogin(); return }
+    toast(`数据加载失败：${e.message}`, 'error')
+  }
 }
 /** 右上角刷新：重新拉取台账/看板/字典/设置，并给出反馈 */
 async function refreshData() {
@@ -148,6 +155,26 @@ function onForceChanged(user) {
   forceChange.value = false
   currentUser.value = user
 }
+/** 识别"未登录/会话失效"错误（IPC 与 HTTP 两条链路统一） */
+function isUnauthorized(e) {
+  return e?.status === 401 || e?.code === 'UNAUTHORIZED' || /请先登录|未登录|会话已过期/.test(e?.message || '')
+}
+/** 会话失效时回到登录页：清会话与数据，避免停在主界面显示空数据+报错 */
+let returningToLogin = false
+function backToLogin(reason) {
+  if (returningToLogin) return
+  returningToLogin = true
+  try { clearSession() } catch (_) {}
+  currentUser.value = null
+  loginReady.value = false
+  forceChange.value = false
+  view.value = 'ledger'
+  contracts.value = []; projects.value = []; parties.value = []; dashboard.value = null
+  detail.value = null; dialog.value = null; selectedId.value = ''
+  toast(reason || '登录状态已失效，请重新登录', 'warn')
+  setTimeout(() => { returningToLogin = false }, 500)
+}
+
 /** 退出登录：清会话、清数据、回到登录页 */
 async function onLogout() {
   try { await api.logout() } catch (_) {}
@@ -198,7 +225,18 @@ onMounted(async () => {
   tick(); timer = setInterval(tick, 1000)
   await checkLicense()
   if (!licenseOk.value) return
-  if (currentUser.value) onLoggedIn(currentUser.value, true)
+  // 有本地账号缓存时先验证会话是否仍有效（换包/数据迁移后旧 token 会失效），
+  // 无效则清掉缓存停在登录页，避免"未登录却显示主界面 + 请先登录报错"。
+  if (currentUser.value) {
+    try {
+      const d = await api.current()
+      if (d?.user) onLoggedIn(d.user, true)
+      else backToLogin('登录已过期，请重新登录')
+    } catch (e) {
+      if (isUnauthorized(e)) backToLogin('登录已过期，请重新登录')
+      else onLoggedIn(currentUser.value, true)  // 网络等临时故障仍放行，load 会再判
+    }
+  }
 })
 onBeforeUnmount(() => { clearInterval(timer) })
 
