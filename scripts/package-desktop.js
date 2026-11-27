@@ -13,6 +13,7 @@ const { Readable } = require('stream')
 const { pipeline } = require('stream/promises')
 const { makeIco } = require('./lib/make-ico')
 const buildNsi = require('./lib/nsi-template')
+const { assertProductionLicenseSafe } = require('./lib/license-guard')
 
 const ROOT = path.join(__dirname, '..')
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
@@ -167,6 +168,7 @@ function buildZip(tools) {
 
 ;(async () => {
   const t0 = Date.now()
+  assertProductionLicenseSafe()
   if (!fs.existsSync(path.join(ROOT, 'dist', 'index.html'))) throw new Error('请先执行 npm run build')
   if (!fs.existsSync(ELECTRON_DIST)) throw new Error('缺少 Electron 运行时，请先执行 npm run install:electron')
 

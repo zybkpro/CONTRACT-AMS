@@ -11,6 +11,7 @@ const { Readable } = require('stream')
 const { pipeline } = require('stream/promises')
 const { readZip, writeZip } = require('./lib/zip')
 const { PREFIX, RES, infoPlist, collectAppFiles, helperScripts, makeIcns } = require('./lib/mac-bundle')
+const { assertProductionLicenseSafe } = require('./lib/license-guard')
 
 const ROOT = path.join(__dirname, '..')
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
@@ -94,6 +95,7 @@ function verify(zipFile) {
 
 ;(async () => {
   const t0 = Date.now()
+  assertProductionLicenseSafe()
   if (!fs.existsSync(path.join(ROOT, 'dist', 'index.html'))) throw new Error('请先执行 npm run build')
   fs.mkdirSync(RELEASE, { recursive: true })
   fs.mkdirSync(WORK, { recursive: true })

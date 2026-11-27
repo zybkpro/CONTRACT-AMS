@@ -17,6 +17,7 @@ const DEFAULTS = {
   apiToken: 'ZYBKPROTOPCAPTCHA2026',
   wechatQrUrl: 'https://zhouqm.oss-cn-beijing.aliyuncs.com/zybkpro/w4.png',
   timeoutMs: 12000,
+  maxOfflineDays: 7, // V1.4 加固：断网超过该天数强制锁定（可用环境变量覆盖）
 }
 
 function cfg() {
@@ -25,6 +26,7 @@ function cfg() {
     apiToken: String(process.env.CONTRACTAMS_LICENSE_API_TOKEN || DEFAULTS.apiToken).trim(),
     wechatQrUrl: process.env.CONTRACTAMS_LICENSE_WECHAT_QR || DEFAULTS.wechatQrUrl,
     timeoutMs: Number(process.env.CONTRACTAMS_LICENSE_TIMEOUT_MS) || DEFAULTS.timeoutMs,
+    maxOfflineDays: Math.max(1, Number(process.env.CONTRACTAMS_LICENSE_MAX_OFFLINE_DAYS) || DEFAULTS.maxOfflineDays),
     skip: process.env.CONTRACTAMS_SKIP_LICENSE === '1',
   }
 }
@@ -70,16 +72,35 @@ function trialStatus(machineId) {
   }
 }
 
+/**
+ * V1.4 加固：machine_id = hash(安装UUID + 硬件指纹)
+ * - 安装 UUID 落盘保证重启稳定
+ * - 叠加主机名 / MAC / 平台等硬件信息，单纯拷贝 machine_id + license.json 到另一台机器会失配
+ */
+function hardwareFingerprint() {
+  const os = require('os')
+  const parts = [os.hostname(), os.platform(), os.arch(), os.cpus()?.length || 0, os.totalmem()]
+  try {
+    const nets = Object.values(os.networkInterfaces()).flat().filter((n) => n && !n.internal && n.mac && n.mac !== '00:00:00:00:00:00')
+    parts.push(...nets.map((n) => n.mac).sort())
+  } catch (_) {}
+  return parts.join('|')
+}
+
 function getMachineId() {
   fs.mkdirSync(db.DATA_DIR, { recursive: true })
   const f = machineFile()
+  let seed = ''
   try {
-    const id = fs.readFileSync(f, 'utf8').trim()
-    if (id && id.length >= 8) return id
+    seed = fs.readFileSync(f, 'utf8').trim()
   } catch (_) {}
-  const id = crypto.randomUUID()
-  fs.writeFileSync(f, id, 'utf8')
-  return id
+  if (!seed || seed.length < 8) {
+    seed = crypto.randomUUID()
+    fs.writeFileSync(f, seed, 'utf8')
+  }
+  const fp = hardwareFingerprint()
+  if (!fp) return seed // 极端情况取不到硬件信息，回退到安装 UUID
+  return crypto.createHash('sha256').update(`${seed}|${fp}`).digest('hex').slice(0, 32)
 }
 
 function loadLicense() {
@@ -100,6 +121,8 @@ function saveLicense(data) {
     activatedAt: data.activatedAt || null,
     expiresAt: data.expiresAt ?? null,
     verifiedAt: new Date().toISOString(),
+    // V1.4 加固：仅远程 verify/activate 成功时刷新；弱网放行不算在线成功
+    lastOnlineOkAt: data.lastOnlineOkAt || new Date().toISOString(),
   }
   fs.writeFileSync(licenseFile(), JSON.stringify(payload, null, 2), 'utf8')
   return payload
@@ -123,6 +146,14 @@ function localStillValid(lic) {
   const t = Date.parse(lic.expiresAt)
   if (!Number.isFinite(t)) return true
   return t > Date.now()
+}
+
+/** V1.4 加固：本地未过期 + 距上次联网成功未超宽限期，才允许弱网临时放行 */
+function offlineGraceOk(lic, maxOfflineDays) {
+  if (!localStillValid(lic)) return false
+  const last = Date.parse(lic.lastOnlineOkAt || lic.verifiedAt || 0)
+  if (!Number.isFinite(last)) return false
+  return Date.now() - last < maxOfflineDays * 86400000
 }
 
 async function remoteCall(pathname, code, machineId) {
@@ -202,6 +233,15 @@ async function getStatus() {
     }
   }
 
+  // V1.4 加固：机器指纹与授权文件不一致（拷贝授权文件到别的机器）→ 直接锁定
+  if (lic.machineId && lic.machineId !== machineId) {
+    return {
+      activated: false, machineMismatch: true,
+      message: '检测到机器指纹与授权不匹配（可能更换了设备）',
+      license: lic, machineId, meta,
+    }
+  }
+
   try {
     const result = await remoteCall('/api/v1/verify', lic.code, machineId)
     if (result.success) {
@@ -217,12 +257,16 @@ async function getStatus() {
       meta,
     }
   } catch (err) {
-    // 弱网兜底：本地未过期可短暂放行
-    if (localStillValid(lic)) {
+    // V1.4 加固：弱网仅在宽限期内临时放行，超过则锁定
+    const maxDays = cfg().maxOfflineDays
+    if (offlineGraceOk(lic, maxDays)) {
+      const last = Date.parse(lic.lastOnlineOkAt || lic.verifiedAt || 0)
+      const left = Math.max(0, Math.ceil((last + maxDays * 86400000 - Date.now()) / 86400000))
       return {
         activated: true,
         offline: true,
-        message: `网络异常，已按本地授权临时放行：${err.message}`,
+        offlineDaysLeft: left,
+        message: `临时离线模式：网络异常，按本地授权放行（剩余 ${left} 天宽限，请尽快联网校验）`,
         license: lic,
         machineId,
         meta,
@@ -231,7 +275,7 @@ async function getStatus() {
     return {
       activated: false,
       offline: true,
-      message: `授权已到期或无法联网校验：${err.message}`,
+      message: `授权离线已超过 ${maxDays} 天宽限期或被远程作废，请联网重新校验：${err.message}`,
       license: lic,
       machineId,
       meta,

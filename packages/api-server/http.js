@@ -51,6 +51,18 @@ class LanServer {
     this.server = null
     this.error = ''
     this.startedAt = ''
+    // V1.4 加固：授权状态内存缓存，避免每个业务请求都远程 verify
+    this._licCache = { at: 0, ok: false, ttlMs: 10 * 60 * 1000 }
+  }
+
+  /** V1.4 加固：业务接口统一授权门禁，结果缓存 10 分钟 */
+  async isLicensed() {
+    const now = Date.now()
+    if (now - this._licCache.at < this._licCache.ttlMs) return this._licCache.ok
+    let ok = false
+    try { ok = !!(await license.getStatus()).activated } catch (_) { ok = false }
+    this._licCache = { at: now, ok, ttlMs: this._licCache.ttlMs }
+    return ok
   }
 
   config() { return db.getConfig() }
@@ -275,6 +287,10 @@ class LanServer {
 
       // 业务 API
       if (p.startsWith('/api/')) {
+        // V1.4 加固：授权门禁（health/license/auth/service 已在前面放行）
+        if (p !== '/api/health' && !(await this.isLicensed())) {
+          return this.send(res, 403, { ok: false, error: '授权未激活或已失效，请联系管理员', code: 'LICENSE_REQUIRED' })
+        }
         const body = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method) ? await this.readBody(req) : {}
         const result = dispatch(req.method, p, url.searchParams, body, {
           source: 'http', trusted, readOnly: !!cfg.h5ReadOnly,

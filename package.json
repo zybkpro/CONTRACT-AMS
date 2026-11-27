@@ -1,6 +1,6 @@
 {
   "name": "contract-ams",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "合同管理系统 · Electron + Vue3 桌面主机模式（内嵌局域网服务 + H5 共享数据）",
   "main": "apps/desktop/main.js",
@@ -19,7 +19,8 @@
     "package:win32": "npm run build && node scripts/package-win-portable.js ia32",
     "package:win7": "npm run build && node scripts/package-win7.js",
     "package:win7-32": "npm run build && node scripts/package-win7.js ia32",
-    "test:api": "node scripts/test-api.js"
+    "test:api": "node scripts/test-api.js",
+    "test:license": "node scripts/test-license-hardening.js"
   },
   "dependencies": {
     "echarts": "^5.6.0",

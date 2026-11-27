@@ -34,7 +34,7 @@ const DEFAULT_SETTINGS = {
   onlyAdminLogin: true,     // 当前仅开放超级管理员登录（临时简化，可关闭恢复多角色）
   // V1.2 新增设置
   recycleKeepDays: 30,      // 回收站保留天数，0=不自动清理
-  appVersion: '1.2.0',
+  appVersion: '1.2.1',
   showNetAmount: false,        // 看板是否显示「在签净额」
   amountEntryBasis: '含税',    // 录入口径：含税 / 不含税
   defaultTaxRate: 0,           // 默认税率（%）
@@ -247,7 +247,7 @@ function migrate() {
     if (!one('SELECT id FROM dict_type WHERE name=?', [name]))
       run('INSERT INTO dict_type (id,name,direction_scope,sort_order) VALUES (?,?,?,?)', [uid('dt'), name, scope, order])
   }
-  if (!one("SELECT value FROM settings WHERE key='app_version'")) setSetting('app_version', '1.2.0')
+  if (!one("SELECT value FROM settings WHERE key='app_version'")) setSetting('app_version', '1.2.1')
 }
 
 /** 确保四个默认账号存在（新库/老库升级都调用；重复调用安全） */

@@ -195,6 +195,10 @@ async function checkLicense() {
     const s = await licenseApi.status()
     licenseInfo.value = s
     licenseOk.value = !!s.activated
+    // V1.4 加固提示：临时离线 / 机器指纹不匹配 / 超宽限锁定
+    if (s.machineMismatch) toast(s.message || '检测到设备变更，请重新激活', 'error')
+    else if (s.activated && s.offline) toast(s.message || '临时离线放行，请尽快联网校验', 'warn')
+    else if (!s.activated && s.offline) toast(s.message || '离线已超宽限期，请联网校验', 'error')
     if (s.inTrial) {
       // 试用提醒只提示一次/天，避免每次启动都弹 toast
       const key = 'contractams-trial-toast'
